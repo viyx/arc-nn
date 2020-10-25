@@ -13,38 +13,10 @@ set_seed(42)
 
 
 
-from datasets import CopyDataset
+from datasets import ARCDataset, ColorPermutation
 
-ds_train_params = dict(
-    n_episodes=1,
-    colors=2,
-    fig_w=2,
-    fig_h=2,
-    field_w=10,
-    field_h=10,
-    n_figs_on_field=3
-)
-
-ds_test_params = dict(
-    n_episodes=1,
-    colors=2,
-    fig_w=3,
-    fig_h=3,
-    field_w=10,
-    field_h=10,
-    n_figs_on_field=2
-)
-
-train_data = CopyDataset(1000_000, **ds_train_params)
-test_data = CopyDataset(10_000, **ds_test_params)
-
-
-
-test_data.ds[100,0]
-
-
-
-train_data.ds[100,0]
+perm = ColorPermutation()
+ds = ARCDataset(augs=[perm])
 
 
 

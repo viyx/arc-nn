@@ -5,6 +5,9 @@ import pandas as pd
 from torch.utils.data import Dataset
 import itertools
 import math
+from multiprocessing import Pool
+import multiprocessing as mp
+from functools import partial
 from copy import deepcopy
 
 
@@ -48,6 +51,13 @@ class ColorPermutation():
     # def __str__(self):
     #     return 'print'
 
+
+def aug_task(task, arc_ds, max_permutations, max_colors):
+    data = arc_ds[task]
+    inst = ColorPermutation.from_data(max_permutations, max_colors, data)
+    return inst
+
+
 class ARCDataset:
     def __init__(self, tasks=None, augs=None):
         if(tasks is None):
@@ -61,18 +71,15 @@ class ARCDataset:
         #work only with ColorPermutation
         self.aug_tasks = None
         if(augs is not None):
-            breaks = [0]
-            instances = []
-            n = 0
             for aug in augs:
-                for task in self.tasks:
-                    data = self[task]
-                    inst = ColorPermutation.from_data(aug.max_permutations, aug.max_colors, data)
-                    n += len(inst)
-                    breaks.append(n)
-                    instances.append(inst)
-            
-            aug_tasks = pd.DataFrame(index=pd.IntervalIndex.from_breaks(breaks, closed='left', name='intervals'), data=instances)
+                f = partial(aug_task, arc_ds=self, max_permutations=aug.max_permutations, max_colors=aug.max_colors)
+                mcp = mp.cpu_count()
+                with Pool(mcp) as p:
+                    insts = p.map(f, self.tasks, len(self.tasks) // mcp)
+
+            breaks = [0] + list(map(len, insts))
+            breaks = np.cumsum(breaks)
+            aug_tasks = pd.DataFrame(index=pd.IntervalIndex.from_breaks(breaks, closed='left', name='intervals'), data=insts)
             self.aug_tasks = aug_tasks.set_index([self.tasks], append=True)
                 
     def __repr__(self):
