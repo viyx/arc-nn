@@ -72,7 +72,7 @@ class Trainer:
             losses = []
             pbar = tqdm(enumerate(loader), total=len(loader)) if is_train else enumerate(loader)
             best_loss = float('inf')
-            tolearnce_lim = config.tolerance_lim
+            tolearnce_lim = config.early_stopping
             tolerance = 0
 
 

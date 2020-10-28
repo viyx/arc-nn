@@ -21,7 +21,7 @@ class ColorPermutation():
 
         if(data is not None):
             u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
-            colors_to_idx = np.zeros(self.max_colors, dtype=np.int)
+            colors_to_idx = np.zeros(self.max_colors, dtype=np.long)
             colors_to_idx[list(u_colors)] = range(len(u_colors))
             self.norms = [[colors_to_idx[ep] for ep in d] for d in data]
             perms = np.array(list(itertools.permutations(range(self.max_colors), len(u_colors))))
@@ -100,6 +100,13 @@ class ARCDataset:
         "Task name to index."
         return self.tasks.index(taskname)
 
+    def itos(self, id):
+        'Index to task name'
+        if(self.aug_tasks is not None):
+            return self.aug_tasks.loc[id].index[0]
+        else:
+            return self.tasks[id]
+
     def __getitem__(self, id):
         
         if(type(id) is str):
@@ -133,7 +140,7 @@ class ARCDataset:
 
 
     # def filter_tasks(self, filters):
-    #     "Make filter by dataset features."
+    #     "Make filter by dataset boolean features."
 
     #     if(not isinstance(filters, (list, tuple))):
     #         filters = [filters]
@@ -141,62 +148,42 @@ class ARCDataset:
     #     tasks = self.features.index[mask].tolist()
     #     return tasks
 
-    # def get_unique_colors(self, taskname):
-    #     "Return all color from task. Test output is not included."
-    #     t0, t1, t0_test, _ = self[taskname]
-    #     all_colors, action_colors = set(), set()
+    # def _add_features(self):
+    #     features_list = \
+    #         ['eq_shape_io', #bool
+    #          'eq_shape_i',  #bool
+    #          'eq_color_i',  #bool
+    #          'eq_color_o']  #bool
+    #     data = []
 
-    #     for episode in zip(t0, t1):
-    #         e_t0, e_t1 = episode
-    #         assert e_t0.shape == e_t1.shape, 'Shapes must be the same. {}'\
-    #                                          .format(taskname)
-    #         diff_mask = e_t0 != e_t1
-    #         action_colors |= set(e_t1[diff_mask])
-    #         all_colors |= set(np.unique(e_t0))
+    #     for t in self.tasks:
+    #         x, y, *_ = self[t]
+    #         pairs = zip(x, y)
 
-    #     # check all test episodes
-    #     assert all(set(np.unique(t0_test[i])) <= all_colors for i in range(
-    #         len(t0_test))), 'Test colors differ from train colors. {}'\
-    #                         .format(taskname)
-    #     return all_colors, action_colors
+    #         # eq_shape_io
+    #         # the same shapes of inputs and outputs by episode
+    #         eq_shape_io = \
+    #             all([np.shape(s[0]) == np.shape(s[1]) for s in pairs])
 
-    # def get_actions_by_intersection(self, taskname, colors):
-    #     """Returns (m, n_colors)"""
-    #     t0, t1, *_ = map(np.array, self[taskname])
-    #     y = []
+    #         # eq_shape_i
+    #         # the same shapes of inputs by demo
+    #         shapes = list(map(np.shape, x))
+    #         eq_shape_i = len(set(shapes)) == 1
 
-    #     for episode in zip(t0, t1):
-    #         e_t0, e_t1 = episode
-    #         assert e_t0.shape == e_t1.shape, 'Shapes must be the same. {}'\
-    #                                          .format(taskname)
+    #         # eq_color_i
+    #         # the same colors of inputs by demo
+    #         colors = list(map(tuple, map(np.unique, x)))
+    #         eq_color_i = len(set(colors)) == 1
 
-    #         diff_mask = (e_t0 != e_t1)
-    #         diff_ = np.repeat(diff_mask[:, :, np.newaxis], len(colors), axis=2)
-    #         et1_ = np.repeat(e_t1[:, :, np.newaxis], len(colors), axis=2)
-    #         colors_ = np.array(list(colors)).reshape(1, 1, len(colors))
-    #         y_ = (colors_ == et1_) & diff_
-    #         y.append(y_.reshape(-1, len(colors)))
+    #         # eq_color_o
+    #         # the same colors of outputs by demo
+    #         colors = list(map(tuple, map(np.unique, y)))
+    #         eq_color_o = len(set(colors)) == 1
 
-    #     y = np.vstack(y)
-    #     return y
+    #         data.append((eq_shape_io, eq_shape_i, eq_color_i, eq_color_o))
 
-    # def get_actions_by_intersection_raw(self, taskname, colors):
-    #     """Returns (m, n_colors)"""
-    #     t0, t1, *_ = self[taskname]
-    #     y = []
-
-    #     for episode in zip(t0, t1):
-    #         e_t0, e_t1 = episode
-    #         assert e_t0.shape == e_t1.shape, 'Shapes must be the same. {}'\
-    #                                          .format(taskname)
-
-    #         diff_mask = (e_t0 != e_t1)
-    #         y_ = e_t1.copy()
-    #         y_[diff_mask == False] = 10
-    #         y.append(y_.reshape(-1))
-
-    #     y = np.concatenate(y)
-    #     return y
+    #     df = pd.DataFrame(index=self.tasks, columns=features_list, data=data)
+    #     return df
 
 
 ###

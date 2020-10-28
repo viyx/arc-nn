@@ -25,6 +25,7 @@ class GPTConfig:
     def __init__(self, vocab_size, block_size, **kwargs):
         self.vocab_size = vocab_size
         self.block_size = block_size
+        # self.masked_length = n_y
         for k,v in kwargs.items():
             setattr(self, k, v)
 
@@ -56,8 +57,9 @@ class CausalSelfAttention(nn.Module):
         # causal mask to ensure that attention is only applied to the left in the input sequence
         self.register_buffer("mask_tril", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
-        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size // 2 + 1, config.block_size)),
-                                    torch.ones((config.block_size // 2, config.block_size))])
+        # tcontext mask to ensure we dont learn predict context itself
+        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.masked_length, config.block_size)),
+                                    torch.ones((config.masked_length, config.block_size))])
                                      .view(1, 1, config.block_size, config.block_size))
         self.n_head = config.n_head
 
@@ -73,7 +75,7 @@ class CausalSelfAttention(nn.Module):
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask_tril[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward()
+        att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -109,9 +111,11 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
 
+        self.padding_idx = config.padding_idx
         # input embedding stem
-        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
-        self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.padding_idx)
+        # self.pos_emb = nn.Parameter(torch.zeros(1, config.n_context, config.n_embd))
+        self.pos_emb = nn.Embedding(config.block_size + 1, config.n_embd, padding_idx=0)
         self.drop = nn.Dropout(config.embd_pdrop)
         # transformer
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
@@ -120,12 +124,13 @@ class GPT(nn.Module):
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.block_size = config.block_size
+        print(self.block_size)
         self.apply(self._init_weights)
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
-    def get_block_size(self):
-        return self.block_size
+    # def get_block_size(self):
+    #     return self.block_size
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -164,7 +169,8 @@ class GPT(nn.Module):
                     no_decay.add(fpn)
 
         # special case the position embedding parameter in the root GPT module as not decayed
-        no_decay.add('pos_emb')
+        # no_decay.add('pos_emb')
+        # no_decay.add('pos_emb')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -188,12 +194,16 @@ class GPT(nn.Module):
 
         # forward the GPT model
         token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
-        position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
+        # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
+
+        #set padding index for positions embeddings as in token embeddings
+        positions = torch.arange(1,self.block_size+1).repeat(b,1).masked_fill(idx == self.padding_idx, 0)
+        position_embeddings = self.pos_emb(positions)
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.head(x)
-        logits_eval = logits[:,-(self.block_size//2 + 1):,].transpose(-1,-2) # take only last logits as we need to predict them from context
+        logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
 
         # if we are given some desired targets also calculate the loss
         loss = None
