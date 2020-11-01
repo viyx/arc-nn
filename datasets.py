@@ -59,10 +59,10 @@ def aug_task(task, arc_ds, max_permutations, max_colors):
 
 
 class ARCDataset:
-    def __init__(self, tasks=None, augs=None):
+    def __init__(self, tasks=None, augs=None, data_folder='./data'):
         if(tasks is None):
-            train_tasks = glob.glob('./data/training/*.json')
-            eval_tasks = glob.glob('./data/evaluation/*.json')
+            train_tasks = glob.glob(data_folder + '/training/*.json')
+            eval_tasks = glob.glob(data_folder + '/evaluation/*.json')
             self.tasks = train_tasks + eval_tasks
         else:
             assert len(tasks) >= 1, 'Specify at least one task.'
