@@ -198,7 +198,7 @@ class GPT(nn.Module):
         # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
 
         #set `0` for positions with padding index
-        positions = self.positions.masked_fill(idx == self.padding_idx, self.padding_idx)
+        positions = self.positions.masked_fill((idx == self.padding_idx).to(idx.device), self.padding_idx)
         position_embeddings = self.pos_emb(positions)
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
