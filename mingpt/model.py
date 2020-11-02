@@ -112,6 +112,9 @@ class GPT(nn.Module):
         super().__init__()
 
         self.padding_idx = config.padding_idx
+        self.block_size = config.block_size
+        # positions start from `1` as `0` token reserved as padding index
+        self.register_buffer('positions', torch.arange(1,self.block_size+1))
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.padding_idx)
         # self.pos_emb = nn.Parameter(torch.zeros(1, config.n_context, config.n_embd))
@@ -123,8 +126,6 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-        self.block_size = config.block_size
-        print(self.block_size)
         self.apply(self._init_weights)
 
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
@@ -196,8 +197,8 @@ class GPT(nn.Module):
         token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
         # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
 
-        #set padding index for positions embeddings as in token embeddings
-        positions = torch.arange(1,self.block_size+1).repeat(b,1).masked_fill(idx == self.padding_idx, 0)
+        #set `0` for positions with padding index
+        positions = self.positions.masked_fill(idx == self.padding_idx, self.padding_idx)
         position_embeddings = self.pos_emb(positions)
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
