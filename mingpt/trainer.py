@@ -125,18 +125,18 @@ def train(self, model, config,):
                 # report progress
                 # pbar.set_description(f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
 
-        if not is_train:
-            test_loss = float(np.mean(losses))
-            logger.info("test loss: %f", test_loss)
-            return test_loss
+        # if not is_train:
+        #     test_loss = float(np.mean(losses))
+        #     logger.info("test loss: %f", test_loss)
+        #     return test_loss
 
-    best_loss = float('inf')
-    self.tokens = 0 # counter used for learning rate decay
-    for epoch in range(config.max_epochs):
+    # best_loss = float('inf')
+    # self.tokens = 0 # counter used for learning rate decay
+    # for epoch in range(config.max_epochs):
 
-        run_epoch('train')
-        if self.test_dataset is not None:
-            test_loss = run_epoch('test')
+    #     run_epoch('train')
+    #     if self.test_dataset is not None:
+    #         test_loss = run_epoch('test')
     
     
     # self.save_checkpoint()
