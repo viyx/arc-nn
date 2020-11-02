@@ -143,7 +143,7 @@ tconf = TrainerConfig(max_epochs=train_epochs, batch_size=1, learning_rate=3e-3,
                       betas = (0.9, 0.95), weight_decay=0,
                       lr_decay=True, warmup_tokens=tokens_per_epoch,
                       final_tokens=train_epochs*tokens_per_epoch,
-                      ckpt_path='model.pt',
+                      ckpt_path='model.pt', tolerance_lim = 1000,
                       num_workers=1, early_stopping=1000)
 
 trainer = Trainer(model, train_dataset, test_dataset, tconf)
