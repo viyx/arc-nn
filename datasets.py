@@ -67,7 +67,7 @@ class ARCDataset:
         if(augs is not None):
             for aug in augs:
                 f = partial(aug_task, arc_ds=self, max_permutations=aug.max_permutations, max_colors=aug.max_colors)
-                mcp = mp.cpu_count()
+                mcp = min(mp.cpu_count(), len(tasks)) #aware case when tasks < cpu
                 with Pool(mcp) as p:
                     insts = p.map(f, self.tasks, len(self.tasks) // mcp)
 
