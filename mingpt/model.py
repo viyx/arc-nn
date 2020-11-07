@@ -58,8 +58,8 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("mask_tril", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
         # tcontext mask to ensure we dont learn predict context itself
-        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.masked_length, config.block_size)),
-                                    torch.ones((config.masked_length, config.block_size))])
+        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.target_length, config.block_size)),
+                                    torch.ones((config.target_length, config.block_size))])
                                      .view(1, 1, config.block_size, config.block_size))
         self.n_head = config.n_head
 
@@ -204,11 +204,11 @@ class GPT(nn.Module):
         x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.head(x)
-        logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
 
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
+            logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
             loss = F.cross_entropy(logits_eval, targets)
 
         return logits, loss
