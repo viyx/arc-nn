@@ -4,3 +4,4 @@ __pycache__/
 *.gz
 *.pt
 *.pickle
+lightning_logs/
