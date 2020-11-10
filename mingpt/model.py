@@ -9,14 +9,13 @@ GPT model:
 
 import math
 import logging
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
 # from pytorch_lightning.core.step_result import TrainResult
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 class GPTConfig:
     """ base GPT config, params common to all GPT versions """
@@ -110,8 +109,26 @@ class Block(nn.Module):
 class GPT(pl.LightningModule):
     """  the full GPT language model, with a context size of block_size """
 
-    def __init__(self, config):
+    def __init__(self, config=None):
         super().__init__()
+
+        if config is None:
+            import argparse
+            config = {
+                'padding_idx':13,
+                'block_size':2048,
+                'vocab_size':14,
+                'target_length':30**2+30+1,
+                'n_embd':8,
+                'n_layer':2,
+                'n_head':8,
+                'embd_pdrop':0.0,
+                'attn_pdrop':0.1,
+                'resid_pdrop':0.1,
+                'lr':1e-2,
+                'momentum':0.5
+            }
+            config = argparse.Namespace(**config)
 
         # in lightning the "config" is hparams (for hyperparameters)
         self.config = config
@@ -133,7 +150,7 @@ class GPT(pl.LightningModule):
 
         self.apply(self._init_weights)
 
-        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
+        # logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
     # def get_block_size(self):
     #     return self.block_size
@@ -149,14 +166,20 @@ class GPT(pl.LightningModule):
 
     def configure_optimizers(self):
         # create the optimizer
-        no_decay = ["bias", "LayerNorm.weight"]
-        params_decay = [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)]
-        params_nodecay = [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)]
-        optim_groups = [
-            {"params": params_decay, "weight_decay": self.config.weight_decay},
-            {"params": params_nodecay, "weight_decay": 0.0},
-        ]
-        optimizer = torch.optim.AdamW(optim_groups, lr=self.config.lr, betas=(self.config.beta1, self.config.beta2))
+        # no_decay = ["bias", "LayerNorm.weight"]
+        # params_decay = [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)]
+        # params_nodecay = [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)]
+        # optim_groups = [
+        #     {"params": params_decay, "weight_decay": self.config.weight_decay},
+        #     {"params": params_nodecay, "weight_decay": 0.0},
+        # ]
+        # optimizer = torch.optim.AdamW(optim_groups, lr=self.config.lr, betas=(self.config.beta1, self.config.beta2))
+
+        optimizer = torch.optim.SGD(
+            self.parameters(),
+            lr=self.config.lr,
+            momentum=self.config.momentum,
+            weight_decay=1e-4)
         return optimizer
 
     def forward(self, idx, targets=None):
@@ -176,21 +199,38 @@ class GPT(pl.LightningModule):
         logits = self.head(x)
         return logits
 
-
-
     def training_step(self, batch, batch_idx):
-        idx, targets = batch
-        # same action as inference
-        logits = self(idx)
-
-        # if we are given some desired targets also calculate the loss
-        loss = None
-        if targets is not None:
-            # take only last logits as we need to predict them from context
-            logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2)
-            loss = F.cross_entropy(logits_eval, targets)
-
-        # result = TrainResult(minimize=loss, checkpoint_on=loss)
+        x, y = batch
+        logits = self(x)
+        logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
+        loss = F.cross_entropy(logits_eval, y)
+        logs = {"loss": loss}
+        # return {"loss": loss, "log": logs}
         self.log('train_loss', loss)
         return loss
+
+    def validation_step(self, batch, batch_nb):
+        x, y = batch
+        logits = self(x)
+        logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
+        loss = F.cross_entropy(logits_eval, y)
+        self.log('val_loss', loss)
+        return loss
+
+    # def validation_epoch_end(self, outputs):
+        # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        # self.log('val_loss', avg_loss)
+
+    def test_step(self, batch, batch_nb):
+        x, y = batch
+        logits = self(x)
+        logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
+        loss = F.cross_entropy(logits_eval, y)
+        self.log('test_loss', loss)
+        return loss
+
+    # def test_epoch_end(self, outputs):
+        # avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
+        # self.log('test_loss', avg_loss)
+
 

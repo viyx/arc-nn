@@ -191,7 +191,7 @@ class GPTDataset(Dataset):
         self.n_colors = n_colors
         self.n_context = n_context
         self.padding = padding # expand x to n_context
-        self.max_y_size = 30 * 30 + 30 + 1 # max flatten y size with special tokens(end_lines, end_episode)
+        self.target_size = 30*30+30+1 # max flatten y size with special tokens(end_lines, end_episode)
         
         # make special tokens 
         self.end_line = n_colors + 0    # array of shape (10, 3) has 10 end_lines
@@ -248,9 +248,9 @@ class GPTDataset(Dataset):
         y = np.concatenate([yt, self.end_episode], axis=None)
         
         # pad y to max flattened 2D field
-        max_tokens_on_field = 30**2 + 30 + 1
-        if(len(y) < max_tokens_on_field and self.padding):
-            y = pad(y, max_tokens_on_field, 'right')
+        # max_tokens_on_field = 30**2 + 30 + 1
+        if(len(y) < self.target_size and self.padding):
+            y = pad(y, self.target_size, 'right')
         
         # context: concat all
         x = np.concatenate([xy, xt, self.promt, y], axis=None)
@@ -267,14 +267,36 @@ class GPTDataset(Dataset):
         return x, y
 
 
-import download
+import os
+import requests
+import logging
+
+
+BUCKET_ADDR = 'https://storage.googleapis.com/viy_data/'
+
+logger = logging.getLogger(__name__)
+
+def try_download_from_bucket(datadir, files):
+    "Download files from google cloud if not exist."
+    for filename in files:
+        file = os.path.join(datadir, filename)
+        os.makedirs(datadir, exist_ok=True)
+        if not os.path.exists(file):
+            logger.info(f'start download: `{file}`')
+            url = BUCKET_ADDR + file
+            r = requests.get(url)
+            with open(file, 'wb') as desc:
+                desc.write(r.content)
+
+
+
 import pickle
 
 
 class MedianDataset():
     def __init__(self, datadir='data/datasets/median/'):
         files = ['test_dataset.pickle', 'train_dataset.pickle']
-        download.try_download_from_bucket(datadir, files)
+        try_download_from_bucket(datadir, files)
         with open(datadir + files[1], 'rb') as f:
             self.train_dataset = pickle.load(f)
         with open(datadir + files[1], 'rb') as f:
