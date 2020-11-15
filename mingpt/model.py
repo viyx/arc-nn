@@ -13,28 +13,10 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import pytorch_lightning as pl
-# from pytorch_lightning.core.step_result import TrainResult
+from argparse import ArgumentParser
 
-# logger = logging.getLogger(__name__)
 
-class GPTConfig:
-    """ base GPT config, params common to all GPT versions """
-    embd_pdrop = 0.1
-    resid_pdrop = 0.1
-    attn_pdrop = 0.1
-
-    def __init__(self, vocab_size, block_size, **kwargs):
-        self.vocab_size = vocab_size
-        self.block_size = block_size
-        # self.masked_length = n_y
-        for k,v in kwargs.items():
-            setattr(self, k, v)
-
-class GPT1Config(GPTConfig):
-    """ GPT-1 like network roughly 125M params """
-    # n_layer = 1
-    # n_head = 4
-    # n_embd = 768
+logger = logging.getLogger(__name__)
 
 class CausalSelfAttention(nn.Module):
     """
@@ -109,44 +91,39 @@ class Block(nn.Module):
 class GPT(pl.LightningModule):
     """  the full GPT language model, with a context size of block_size """
 
-    def __init__(self, config=None):
+    def __init__(
+        self,
+        padding_idx:int = 13,
+        block_size: int = 2048,
+        vocab_size: int = 14,
+        target_length: int = 30**2+30+1,
+        n_embd: int = 8,
+        n_layer: int = 2,
+        n_head: int = 8,
+        embd_pdrop: float = 0.0,
+        attn_pdrop: float = 0.1,
+        resid_pdrop: float = 0.1,
+        lr: float = 1e-2,
+        momentum: float = 0.5,
+        **kwargs):
+
         super().__init__()
+        self.save_hyperparameters()
 
-        if config is None:
-            import argparse
-            config = {
-                'padding_idx':13,
-                'block_size':2048,
-                'vocab_size':14,
-                'target_length':30**2+30+1,
-                'n_embd':8,
-                'n_layer':2,
-                'n_head':8,
-                'embd_pdrop':0.0,
-                'attn_pdrop':0.1,
-                'resid_pdrop':0.1,
-                'lr':1e-2,
-                'momentum':0.5
-            }
-            config = argparse.Namespace(**config)
-
-        # in lightning the "config" is hparams (for hyperparameters)
-        self.config = config
-
-        self.padding_idx = self.config.padding_idx
-        self.block_size = self.config.block_size
+        self.padding_idx = self.hparams.padding_idx
+        self.block_size = self.hparams.block_size
         # positions start from `1` as `0` token reserved as padding index
         self.register_buffer('positions', torch.arange(1,self.block_size+1))
         # input embedding stem
-        self.tok_emb = nn.Embedding(self.config.vocab_size, self.config.n_embd, padding_idx=self.padding_idx)
+        self.tok_emb = nn.Embedding(self.hparams.vocab_size, self.hparams.n_embd, padding_idx=self.padding_idx)
         # self.pos_emb = nn.Parameter(torch.zeros(1, config.n_context, config.n_embd))
-        self.pos_emb = nn.Embedding(self.config.block_size + 1, self.config.n_embd, padding_idx=0)
-        self.drop = nn.Dropout(self.config.embd_pdrop)
+        self.pos_emb = nn.Embedding(self.hparams.block_size + 1, self.hparams.n_embd, padding_idx=0)
+        self.drop = nn.Dropout(self.hparams.embd_pdrop)
         # transformer
-        self.blocks = nn.Sequential(*[Block(self.config) for _ in range(self.config.n_layer)])
+        self.blocks = nn.Sequential(*[Block(self.hparams) for _ in range(self.hparams.n_layer)])
         # decoder head
-        self.ln_f = nn.LayerNorm(self.config.n_embd)
-        self.head = nn.Linear(self.config.n_embd, self.config.vocab_size, bias=False)
+        self.ln_f = nn.LayerNorm(self.hparams.n_embd)
+        self.head = nn.Linear(self.hparams.n_embd, self.hparams.vocab_size, bias=False)
 
         self.apply(self._init_weights)
 
@@ -170,16 +147,16 @@ class GPT(pl.LightningModule):
         # params_decay = [p for n, p in self.named_parameters() if not any(nd in n for nd in no_decay)]
         # params_nodecay = [p for n, p in self.named_parameters() if any(nd in n for nd in no_decay)]
         # optim_groups = [
-        #     {"params": params_decay, "weight_decay": self.config.weight_decay},
+        #     {"params": params_decay, "weight_decay": self.hparams.weight_decay},
         #     {"params": params_nodecay, "weight_decay": 0.0},
         # ]
-        # optimizer = torch.optim.AdamW(optim_groups, lr=self.config.lr, betas=(self.config.beta1, self.config.beta2))
+        # optimizer = torch.optim.AdamW(optim_groups, lr=self.hparams.lr, betas=(self.hparams.beta1, self.hparams.beta2))
 
         optimizer = torch.optim.SGD(
             self.parameters(),
-            lr=self.config.lr,
-            momentum=self.config.momentum,
-            weight_decay=1e-4)
+            lr=self.hparams.lr,
+            momentum=self.hparams.momentum,
+            weight_decay=self.hparams.weight_decay)
         return optimizer
 
     def forward(self, idx, targets=None):
@@ -204,18 +181,16 @@ class GPT(pl.LightningModule):
         logits = self(x)
         logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
         loss = F.cross_entropy(logits_eval, y)
-        logs = {"loss": loss}
-        # return {"loss": loss, "log": logs}
         self.log('train_loss', loss)
         return loss
 
-    def validation_step(self, batch, batch_nb):
-        x, y = batch
-        logits = self(x)
-        logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
-        loss = F.cross_entropy(logits_eval, y)
-        self.log('val_loss', loss)
-        return loss
+    # def validation_step(self, batch, batch_nb):
+    #     x, y = batch
+    #     logits = self(x)
+    #     logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
+    #     loss = F.cross_entropy(logits_eval, y)
+    #     self.log('val_loss', loss)
+    #     return loss
 
     # def validation_epoch_end(self, outputs):
         # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
@@ -232,5 +207,20 @@ class GPT(pl.LightningModule):
     # def test_epoch_end(self, outputs):
         # avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
         # self.log('test_loss', avg_loss)
-
-
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--padding_idx", type=int, default=13)
+        parser.add_argument("--block_size", type=int, default=2048)
+        parser.add_argument("--target_length", type=int, default=30*30+30+1)
+        parser.add_argument("--n_embd", type=int, default=8)
+        parser.add_argument("--n_head", type=int, default=2)
+        parser.add_argument("--n_layer", type=int, default=2)
+        parser.add_argument("--embd_pdrop", type=float, default=0.0)
+        parser.add_argument("--attn_pdrop", type=float, default=0.1)
+        parser.add_argument("--resid_pdrop", type=float, default=0.1)
+        parser.add_argument("--vocab_size", type=int, default=14)
+        parser.add_argument("--batch_size", type=int, default=64)
+        parser.add_argument("--lr", type=float, default=1e-2)
+        parser.add_argument("--weight_decay", type=float, default=1e-4)
+        return parser
