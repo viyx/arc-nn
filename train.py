@@ -21,8 +21,10 @@ from argparse import ArgumentParser
 import numpy as np
 from datasets import MedianDataModule
 from pytorch_lightning import Trainer
+# from pytorch_lightning.callbacks import ModelCheckpoint
 import pytorch_lightning as pl
 from mingpt.model import GPT
+# from callbacks import SampleImagesCallback
 
 
 def cli_main():
@@ -30,28 +32,21 @@ def cli_main():
     parser = ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
     parser = GPT.add_model_specific_args(parser)
-    parser = MedianDataModule.add_specific_args(parser)
+    parser = MedianDataModule.add_data_specific_args(parser)
     args = parser.parse_args()
     dm = MedianDataModule.from_argparse_args(args)
     model = GPT(**args.__dict__)
-    trainer = pl.Trainer.from_argparse_args(args)
-    # trainer = Trainer(tpu_cores=args.num_cores,
-    #                     precision=args.precision,
-    #                     max_epochs=args.,
-    #                     # fast_dev_run=True,
-    #                     limit_train_batches=0.02,
-    #                     # limit_val_batches=100,
-    #                     # val_check_interval=1000,
-    #                     # gradient_clip_val=1.0,
-    #                     # callbacks=[lr_decay],
-    #                     progress_bar_refresh_rate=1)
-
+    # cl = SampleImagesCallback()
+    # chck_cl = ModelCheckpoint(dirpath='~/projects/arc-nn/lightning_logs/version_48/checkpoints')
+    trainer = pl.Trainer.from_argparse_args(args, fast_dev_run=True)
     trainer.fit(model, datamodule=dm)
-    trainer.test(datamodule=dm)
+    # pass
+    trainer.test(model, datamodule=dm)
+
+    # model = GPT.load_from_checkpoint('./lightning_logs/version_87')
+
 
 
 if __name__=='__main__':
-    # print(123)
-    # Trainer(tpu_cores=1)
     cli_main()
 

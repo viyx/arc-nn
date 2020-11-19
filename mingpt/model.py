@@ -41,9 +41,9 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("mask_tril", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
         # tcontext mask to ensure we dont learn predict context itself
-        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.target_length, config.block_size)),
-                                    torch.ones((config.target_length, config.block_size))])
-                                     .view(1, 1, config.block_size, config.block_size))
+        # self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.target_length, config.block_size)),
+                                    # torch.ones((config.target_length, config.block_size))])
+                                    #  .view(1, 1, config.block_size, config.block_size))
         self.n_head = config.n_head
 
     def forward(self, x, layer_past=None):
@@ -58,7 +58,7 @@ class CausalSelfAttention(nn.Module):
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask_tril[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
+        # att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -88,6 +88,7 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln2(x))
         return x
 
+
 class GPT(pl.LightningModule):
     """  the full GPT language model, with a context size of block_size """
 
@@ -112,6 +113,8 @@ class GPT(pl.LightningModule):
 
         self.padding_idx = self.hparams.padding_idx
         self.block_size = self.hparams.block_size
+        self.target_length = self.hparams.target_length
+
         # positions start from `1` as `0` token reserved as padding index
         self.register_buffer('positions', torch.arange(1,self.block_size+1))
         # input embedding stem
@@ -127,7 +130,7 @@ class GPT(pl.LightningModule):
 
         self.apply(self._init_weights)
 
-        # logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
+        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
     # def get_block_size(self):
     #     return self.block_size
@@ -168,7 +171,8 @@ class GPT(pl.LightningModule):
         # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
 
         #set `0` for positions with padding index
-        positions = self.positions.masked_fill((idx == self.padding_idx).to(idx.device), self.padding_idx)
+        positions = self.positions[:t]
+        positions = positions.masked_fill((idx == self.padding_idx).to(idx.device), 0)
         position_embeddings = self.pos_emb(positions)
         x = self.drop(token_embeddings + position_embeddings)
         x = self.blocks(x)
@@ -193,20 +197,23 @@ class GPT(pl.LightningModule):
     #     return loss
 
     # def validation_epoch_end(self, outputs):
-        # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        # self.log('val_loss', avg_loss)
+    #     # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+    #     avg_loss = torch.stack(outputs).mean()
+    #     self.log('val_loss', avg_loss)
 
-    def test_step(self, batch, batch_nb):
-        x, y = batch
-        logits = self(x)
-        logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
-        loss = F.cross_entropy(logits_eval, y)
-        self.log('test_loss', loss)
-        return loss
+    # def test_step(self, batch, batch_nb):
+    #     x, y = batch
+    #     logits = self(x)
+    #     logits_eval = logits[:,-y.shape[1]:,:].transpose(-1,-2)
+    #     loss = F.cross_entropy(logits_eval, y)
+    #     self.log('test_loss', loss)
+    #     return loss
 
     # def test_epoch_end(self, outputs):
-        # avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
-        # self.log('test_loss', avg_loss)
+    #     # avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
+    #     avg_loss = torch.stack(outputs).mean()
+    #     self.log('test_loss', avg_loss)
+        
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
@@ -220,7 +227,6 @@ class GPT(pl.LightningModule):
         parser.add_argument("--attn_pdrop", type=float, default=0.1)
         parser.add_argument("--resid_pdrop", type=float, default=0.1)
         parser.add_argument("--vocab_size", type=int, default=14)
-        parser.add_argument("--batch_size", type=int, default=64)
         parser.add_argument("--lr", type=float, default=1e-2)
         parser.add_argument("--weight_decay", type=float, default=1e-4)
         return parser

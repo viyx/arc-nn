@@ -256,13 +256,13 @@ class GPTDataset(Dataset):
     flat 2D array and add `end_line` in the end of every line.
     """
     
-    def __init__(self, ds, n_colors, n_context, padding=False):
-        self.ds = ds
+    def __init__(self, dataset, n_colors, n_context, target_length, padding=False):
+        self.dataset = dataset
         self.n_colors = n_colors
         self.n_context = n_context
         self.padding = padding # expand x to n_context
         # max flatten y size with special tokens(30 end_lines,1 end_episode)
-        self.max_y_size = 30 * 30 + 30 + 1
+        self.target_length = target_length
         
         # make special tokens 
         self.end_line_token = n_colors + 0    # array of shape (10, 3) has 10 end_lines
@@ -273,7 +273,7 @@ class GPTDataset(Dataset):
         self.vocab_size = n_colors + 4
         
     def __len__(self):
-        return len(self.ds)
+        return len(self.dataset)
     
     def flat_2D_field(self, x):
         "Add column of `end_line` tokens and flat 2D array."
@@ -299,8 +299,8 @@ class GPTDataset(Dataset):
 
     def flat_all_sample(self, x, y, x_test, y_test):
         # flat train pairs
-        xy = list(map(self.flat_pair, zip(x, y)))
-        xy = np.concatenate(xy, axis=None)
+        xy_train = list(map(self.flat_pair, zip(x, y)))
+        xy_train = np.concatenate(xy_train, axis=None)
         
         #flat test pair
         
@@ -310,28 +310,32 @@ class GPTDataset(Dataset):
         x_test = x_test[0]
         y_test = y_test[0]
             
-        xt = self.flat_2D_field(x_test)
-        yt = self.flat_2D_field(y_test)
+        x_test = self.flat_2D_field(x_test)
+        y_test = self.flat_2D_field(y_test)
         
         # just add end of episode
-        y = np.concatenate([yt, self.end_episode_token], axis=None)
+        y = np.concatenate([y_test, self.end_episode_token], axis=None)
         
         # pad y to max flattened 2D field
-        if(len(y) < self.max_y_size and self.padding):
-            y = self.pad(y, self.max_y_size, 'right')
+        if(len(y) < self.target_length and self.padding):
+            y = self.pad(y, self.target_length, 'right')
         
         # context: concat all
-        x = np.concatenate([xy, xt, self.promt_token, y], axis=None)
+        x = np.concatenate([xy_train, x_test, self.promt_token, y[:-1]], axis=None)
         
         # padding
         if(len(x) < self.n_context and self.padding): # expand sample to n_context
             x = self.pad(x, self.n_context, 'left')
             
+        # we dont make shift like x = data[:-1], y = data[1:] to decrease memory flow
+        # we will cut predictions to max_target_size in model in order to calculate criterion
+        # len(x) = n_context, len(y) = max_target_size
         return x, y
+
     
     def __getitem__(self, id):
         "Get raw example, then flat it and add special symbols."
-        x, y, x_test, y_test = self.ds[id]
+        x, y, x_test, y_test = self.dataset[id]
         x, y = self.flat_all_sample(x, y, x_test, y_test)
         return x, y
 
@@ -349,6 +353,8 @@ class ARCDataModule(LightningDataModule):
     "Abstract data module."
     def __init__(
         self, 
+        batch_size: int = 8,
+        num_workers: int = 8,
         download: bool = False,
         datadir: str ='./data/datasets/default/',
         files: list = ['train.pickle', 'test.pickle', 'val.pickle'],
@@ -361,12 +367,15 @@ class ARCDataModule(LightningDataModule):
         super().__init__(*args, **kwargs)
         assert sum(train_test_val_split) == 1
 
+        self.batch_size = batch_size
+        self.num_workers = num_workers
         self.download = download
         self.datadir = datadir
         self.files = files
         self.train_test_val_split = train_test_val_split
         self.save = save
         self.seed = seed
+
 
     def prepare_data(self):
         Path(self.datadir).mkdir(parents=True, exist_ok=True)
@@ -379,8 +388,10 @@ class ARCDataModule(LightningDataModule):
             self.train, self.test, self.val = datasets
 
     @staticmethod
-    def add_specific_args(parent_parser):
+    def add_data_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--num_workers", type=int, default=8)
+        parser.add_argument("--batch_size", type=int, default=8)
         parser.add_argument("--download", action="store_true")
         parser.add_argument("--datadir", type=str, default='./data/datasets/default/')
         return parser
@@ -391,25 +402,24 @@ class MedianDataModule(ARCDataModule):
         self,
         n_colors: int = 10,
         n_context: int = 2048,
-        batch_size: int = 8,
-        num_workers: int = 8,
+        target_length: int = 30 * 30 + 30 + 1,
          *args, **kwargs):
 
         super().__init__(*args, **kwargs)
         self.logger = logging.getLogger('MedianDataset')
         self.n_colors = n_colors
         self.n_context = n_context
-        self.batch_size = batch_size
-        self.num_workers = num_workers
+        self.target_length = target_length
         self.datadir = 'data/datasets/median/'
       
-    def setup(self, stage=None):
+    def prepare_data(self):
         "Find tasks with median x length. Create train, test, val ARCDatasets."
+        super().prepare_data()
 
         if(not self.download): # create new dataset
             # TODO remove hardcode
             ds = LightARCDataset()
-            gpt_ds = GPTDataset(ds, self.n_colors, self.n_context, True)
+            gpt_ds = GPTDataset(ds, self.n_colors, self.n_context,self.target_length, True)
 
             # collect lenghts of flattened samples
             lxs = []
@@ -420,9 +430,9 @@ class MedianDataModule(ARCDataModule):
                 
                 # tests
                 #check special token counts
-                x, *_ = ds[id]
-                assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x) + 1, "End of episodes missmatched."
-                assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
+                x_train, *_ = ds[id]
+                # assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x_train), "End of episodes missmatched."
+                # assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
             #     assert (x_gpt == no_aug_ds.new_line).sum() == len(x) + 1, "Promts missmatched."
                 
             lxs = pd.Series(lxs)
@@ -445,9 +455,9 @@ class MedianDataModule(ARCDataModule):
             train = LightARCDataset(tasks=train, transforms=[LightWeightColorPermutation(max_colors=self.n_colors, limit=10000)])
             val = LightARCDataset(tasks=val, transforms=[LightWeightColorPermutation(max_colors=self.n_colors, limit=100)])
             test = LightARCDataset(tasks=test)
-            self.train = GPTDataset(train, self.n_colors, self.n_context, True)
-            self.test = GPTDataset(test, self.n_colors, self.n_context, True)
-            self.val = GPTDataset(val, self.n_colors, self.n_context, True)
+            self.train = GPTDataset(train, self.n_colors, self.n_context, self.target_length, True)
+            self.test = GPTDataset(test, self.n_colors, self.n_context, self.target_length, True)
+            self.val = GPTDataset(val, self.n_colors, self.n_context, self.target_length, True)
 
             self.logger.info('Lengths after transforms. train : {}, test : {}, val : {}'. format(len(train), len(test), len(val)))
 
@@ -458,13 +468,14 @@ class MedianDataModule(ARCDataModule):
                         pickle.dump(datasets[i], f)
 
     def train_dataloader(self):
-        return DataLoader(self.train, batch_size=self.batch_size)
+        return DataLoader(self.train, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
-    def val_dataloader(self):
-        return DataLoader(self.val, batch_size=self.batch_size)
+    # def val_dataloader(self):
+    #     return DataLoader(self.val, batch_size=self.batch_size, num_workers=self.num_workers)
 
-    def test_dataloader(self):
-        return DataLoader(self.test, batch_size=self.batch_size)
+    # def test_dataloader(self):
+    #     return DataLoader(self.test, batch_size=self.batch_size,
+    #         num_workers=self.num_workers, drop_last=False, shuffle=False)
 
 
 ###
