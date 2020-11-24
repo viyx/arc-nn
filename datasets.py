@@ -44,7 +44,6 @@ from copy import deepcopy
 
 
 from math import factorial
-import functools
 from itertools import permutations
 class LightWeightColorPermutation():
     # TODO make shuffling for permutation when limit exists
@@ -53,7 +52,6 @@ class LightWeightColorPermutation():
         self.limit = limit
         self.max_colors = max_colors
 
-    @functools.lru_cache(10)
     def P(self, n, r):
         "Return permutation counts. Order matters."
         return factorial(n) // factorial(n - r)
@@ -83,7 +81,6 @@ class LightWeightColorPermutation():
     #     return tuple(digits)
     #     # return int(''.join(map(str, digits)))
 
-    @functools.lru_cache(10)
     def _get_permutations(self, n, r):
         return list(permutations(range(n), r))
 
@@ -152,16 +149,17 @@ class LightARCDataset:
             return len(self.tasks)
 
     def __getitem__(self, id):
-        "Return transformed task only if `id` is `int` and transforms exist"
+        "Find task and make tranformations."
 
-        # id to task name
-        if(type(id) is int and not self.transforms):
+
+        # convert id to taskname if no transorms
+        if(type(id) is int and self.transforms is None):
             id = self.tasks[id]
 
         if(type(id) is not int): # id is str, untransformed task
             with open(id) as f:
                 sample = json.load(f)
-            # lists of 2-D arrays
+            # map json to lists of 2-D arrays
                 train_x = list(
                     map(lambda d: np.array(d['input']),  sample['train']))
                 train_y = list(
@@ -176,25 +174,24 @@ class LightARCDataset:
                 if('output' in sample['test'][0]):
                     test_y = list(map(lambda d: np.array(d['output']), sample['test']))
 
-                # (list(np.array(ndim=2)), ...)
+                # list(np.array(ndim=2)), list(np.array(ndim=2)) ...
                 return train_x, train_y, test_x, test_y
         else:
-            # make all permuations
-            task_idx = np.searchsorted(self.breaks, id) - 1
-            task = self.tasks[task_idx] # str
-            break_len = self.breaks[task_idx + 1] - self.breaks[task_idx]
-            original_data = self[task]
-            per_data = original_data
-
-            # get index for each transform and transform data
+            # find original task for `id` and make all transforms
+            original_task_idx = np.searchsorted(self.breaks, id) - 1
+            original_taskname = self.tasks[original_task_idx] # str
+            original_data = self[original_taskname]
+            
+            break_len = self.breaks[original_task_idx + 1] - self.breaks[original_task_idx]
+            permuted_data = original_data
+            # get index for each transform and do transform
             for t in self.transforms:
                 c = t.count(original_data)
                 q, r = divmod(break_len, c)
-                per_data = t.transform_data(q, per_data)
+                permuted_data = t.transform_data(q, permuted_data)
                 break_len = r
 
-            return per_data
-
+            return permuted_data
 
 
     # def filter_tasks(self, filters):
@@ -255,13 +252,13 @@ class GPTDataset(Dataset):
     flat 2D array and add `end_line` in the end of every line.
     """
     
-    def __init__(self, ds, n_colors, n_context, padding=False):
-        self.ds = ds
+    def __init__(self, dataset, n_colors, n_context, target_length, padding=False):
+        self.dataset = dataset
         self.n_colors = n_colors
         self.n_context = n_context
         self.padding = padding # expand x to n_context
         # max flatten y size with special tokens(30 end_lines,1 end_episode)
-        self.max_y_size = 30 * 30 + 30 + 1
+        self.target_length = target_length
         
         # make special tokens 
         self.end_line_token = n_colors + 0    # array of shape (10, 3) has 10 end_lines
@@ -272,7 +269,7 @@ class GPTDataset(Dataset):
         self.vocab_size = n_colors + 4
         
     def __len__(self):
-        return len(self.ds)
+        return len(self.dataset)
     
     def flat_2D_field(self, x):
         "Add column of `end_line` tokens and flat 2D array."
@@ -298,8 +295,8 @@ class GPTDataset(Dataset):
 
     def flat_all_sample(self, x, y, x_test, y_test):
         # flat train pairs
-        xy = list(map(self.flat_pair, zip(x, y)))
-        xy = np.concatenate(xy, axis=None)
+        xy_train = list(map(self.flat_pair, zip(x, y)))
+        xy_train = np.concatenate(xy_train, axis=None)
         
         #flat test pair
         
@@ -309,61 +306,110 @@ class GPTDataset(Dataset):
         x_test = x_test[0]
         y_test = y_test[0]
             
-        xt = self.flat_2D_field(x_test)
-        yt = self.flat_2D_field(y_test)
+        x_test = self.flat_2D_field(x_test)
+        y_test = self.flat_2D_field(y_test)
         
         # just add end of episode
-        y = np.concatenate([yt, self.end_episode_token], axis=None)
+        y = np.concatenate([y_test, self.end_episode_token], axis=None)
         
         # pad y to max flattened 2D field
-        if(len(y) < self.max_y_size and self.padding):
-            y = self.pad(y, self.max_y_size, 'right')
+        if(len(y) < self.target_length and self.padding):
+            y = self.pad(y, self.target_length, 'right')
         
         # context: concat all
-        x = np.concatenate([xy, xt, self.promt_token, y], axis=None)
+        x = np.concatenate([xy_train, x_test, self.promt_token, y[:-1]], axis=None)
         
         # padding
         if(len(x) < self.n_context and self.padding): # expand sample to n_context
             x = self.pad(x, self.n_context, 'left')
             
+        # we dont make shift like x = data[:-1], y = data[1:] to decrease memory flow
+        # we will cut predictions to max_target_size in model in order to calculate criterion
+        # len(x) = n_context, len(y) = max_target_size
         return x, y
     
     def __getitem__(self, id):
         "Get raw example, then flat it and add special symbols."
-        x, y, x_test, y_test = self.ds[id]
+        x, y, x_test, y_test = self.dataset[id]
         x, y = self.flat_all_sample(x, y, x_test, y_test)
         return x, y
 
 
-from download import try_download_from_bucket
+###
+### Here you can find different configuraitons of datasets
+### 
+
+
+from download import try_load_and_save_from_bucket_if_not_exist
 import pickle
 import logging
-md_logger = logging.getLogger('MedianDataset')
+from pathlib import Path
+from argparse import ArgumentParser
 
 
-class MedianDataset():
-    # TODO do abstract class
-    # TODO api for building datasets
-    def __init__(self, download=True, datadir='./data/datasets/median/', files = ['train.pickle', 'test.pickle', 'val.pickle']):
-        from pathlib import Path
+class AbstractDataset():
+    "Common object for all datasets"
+    def __init__(
+        self,
+        datadir,
+        download=True,
+        files=['train.pickle', 'test.pickle', 'val.pickle'],
+        transforms=[None, None, None],  # train, test, val transformations
+        split = '(0.8,0.1,0.1)',
+        *args,
+        **kwargs):
+
+        self.split = eval(split)
+        assert sum(self.split) == 1
         Path(datadir).mkdir(parents=True, exist_ok=True)
         self.datadir = datadir
         self.files = files
+        self.transforms = transforms
+        self.datasets = []
+
         if download:
-            try_download_from_bucket(datadir, files)
-            self.datasets = []
+            try_load_and_save_from_bucket_if_not_exist(datadir, files)
             for f in files:
                 with open(datadir + f, 'rb') as file:
                     self.datasets.append(pickle.load(file))
-        else: self.create_new()
+        else: self.create_new_dataset(**kwargs)
 
-    def create_new(self):
-        "Find tasks with median x length. Create train, test, val ARCDatasets."
+    def create_new_dataset(self, **kwargs):
+        raise(NotImplementedError())
 
-        # TODO remove hardcode
-        n_context = 2048
+    @classmethod
+    def add_data_specific_args(cls, parent_parser):
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--split", type=str, default='(0.8,0.1,0.1)')
+        parser.add_argument("--download", action="store_true")
+        # parser.add_argument("--datadir", type=str, default='./data/datasets/default/')
+        return parser
+
+
+class MaxNDataset(AbstractDataset):
+    "Fitler tasks by length of context."
+    # TODO api for building datasets
+    def __init__(
+        self,
+        target_length,
+        n_colors=10,
+        maxn=2048, # median lenght is ~2048
+        # datadir='data/datasets/maxn/',
+        *args,
+        **kwargs):
+
+        self.logger = logging.getLogger('MaxNDataset')
+        self.maxn = maxn
+        self.target_length = target_length
+        self.n_colors = n_colors
+        super().__init__(*args, **kwargs)
+
+    def create_new_dataset(self, **kwargs):
+        "Find tasks with length <= maxn. Create train, test, val datasets."
+
+        # find tasks with length <= maxn
         ds = LightARCDataset()
-        gpt_ds = GPTDataset(ds, 10, n_context, True)
+        gpt_ds = GPTDataset(ds, self.n_colors, self.maxn, self.target_length, True)
         lxs = []
 
         for id in range(len(ds)):
@@ -373,33 +419,43 @@ class MedianDataset():
             # tests
             #check special token counts
             x, *_ = ds[id]
-            assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x) + 1, "End of episodes missmatched."
-            assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
+            # assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x) + 1, "End of episodes missmatched."
+            # assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
         #     assert (x_gpt == no_aug_ds.new_line).sum() == len(x) + 1, "Promts missmatched."
             
         lxs = pd.Series(lxs)
-        md_logger.info('Median length : {}'.format(lxs.median()))
-        indices = lxs[lxs <= n_context].index.tolist()
-        median_tasks = np.array(ds.tasks)[indices].tolist()
+        # md_logger.info('Median length : {}'.format(lxs.median()))
+        indices = lxs[lxs <= self.maxn].index.tolist()
+        maxn_tasks = np.array(ds.tasks)[indices].tolist()
 
-        train, test, val = .8, .1, .1
-        train = int(train * len(median_tasks))
-        test = int(test * len(median_tasks))
-        train, test, val = np.array_split(median_tasks, [train, test + train])
+        # split tasks
+        train, test, val = self.split
+        train = int(train * len(maxn_tasks))
+        test = int(test * len(maxn_tasks))
+        train, test, val = np.array_split(maxn_tasks, [train, test + train])
+        self.logger.info('Lengths before transforms. train : {}, test : {}, val : {}'. format(len(train), len(test), len(val)))
 
-        md_logger.info('Lengths before transforms. train : {}, test : {}, val : {}'. format(len(train), len(test), len(val)))
-
-        train = LightARCDataset(tasks=train, transforms=[LightWeightColorPermutation(max_colors=10, limit=10000)])
-        test = LightARCDataset(tasks=test)
-        val = LightARCDataset(tasks=val, transforms=[LightWeightColorPermutation(max_colors=10, limit=100)])
-
-        md_logger.info('Lengths after transforms. train : {}, test : {}, val : {}'. format(len(train), len(test), len(val)))
-        self.datasets = [train, test, val]
-
-        for i, file in enumerate(self.files):
+        # make datasets
+        tasks = [train, test, val]
+        for tasks, transform, file in zip(tasks, self.transforms, self.files):
+            arc = LightARCDataset(tasks=tasks, transforms=transform)
+            gpt = GPTDataset(arc, self.n_colors, self.maxn, self.target_length, True)
             with open(self.datadir + file, 'wb') as f:
-                # f.writelines(['123', '321'])
-                pickle.dump(self.datasets[i], f)
+                pickle.dump(gpt, f)
+            self.datasets.append(gpt)
+
+        self.logger.info('Lengths after transforms. train : {}, test : {}, val : {}'.
+            format(*map(len, self.datasets)))
+
+    @classmethod
+    def add_data_specific_args(cls, parent_parser):
+        parent_parser = super().add_data_specific_args(parent_parser)
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        # parser.add_argument("--target_length", type=int, default=30*30+30+1)
+        parser.add_argument("--maxn", type=int, default=2048)
+        parser.add_argument("--n_colors", type=int, default=10)
+        parser.add_argument("--datadir", type=str, default='data/datasets/maxn/')
+        return parser
 
 ###
 #Generation

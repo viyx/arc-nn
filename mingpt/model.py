@@ -9,7 +9,7 @@ GPT model:
 
 import math
 import logging
-
+from argparse import ArgumentParser
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -212,3 +212,21 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits_eval, targets)
 
         return logits, loss
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--padding_idx", type=int, default=13)
+        parser.add_argument("--block_size", type=int, default=2048)
+        parser.add_argument("--target_length", type=int, default=30*30+30+1)
+        parser.add_argument("--n_embd", type=int, default=8)
+        parser.add_argument("--n_head", type=int, default=2)
+        parser.add_argument("--n_layer", type=int, default=2)
+        parser.add_argument("--embd_pdrop", type=float, default=0.0)
+        parser.add_argument("--attn_pdrop", type=float, default=0.1)
+        parser.add_argument("--resid_pdrop", type=float, default=0.1)
+        parser.add_argument("--vocab_size", type=int, default=14)
+        parser.add_argument("--lr", type=float, default=1e-2)
+        parser.add_argument("--weight_decay", type=float, default=1e-4)
+        parser.add_argument("--momentum", type=float, default=0.5)
+        return parser

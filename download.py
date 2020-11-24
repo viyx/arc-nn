@@ -7,8 +7,8 @@ BUCKET_ADDR = 'https://storage.googleapis.com/viy_data/'
 
 logger = logging.getLogger(__name__)
 
-def try_download_from_bucket(datadir, files):
-    "Download files from google cloud if not exist."
+def try_load_and_save_from_bucket_if_not_exist(datadir, files):
+    "Download files from google cloud if they are not exist."
     for filename in files:
         file = os.path.join(datadir, filename)
         os.makedirs(datadir, exist_ok=True)
