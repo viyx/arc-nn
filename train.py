@@ -1,76 +1,3 @@
-# import args_parse
-
-# MODEL_OPTS = {
-#     'vocab_size': 14,
-#     'block_size': 2018,
-#     'target_length': 30 ** 2 + 30 + 1,
-#     'padding_index': 13,
-#     'embd_pdrop': 0.0,
-#     'resid_pdrop': 0.1,
-#     'attn_pdrop': 0.1,
-#     'n_layer': 2,
-#     'n_head': 8,
-#     'n_embd': 8
-# }
-
-# MODEL_OPTS = {
-#     '--vocab_size': {
-#         'type': int,
-#         'default': 14,
-#     },
-#     '--block_size': {
-#         'type': int,
-#         'default': 2048,
-#     },
-#     '--target_length': {
-#         'type': int,
-#         'default': 30 ** 2 + 30 + 1,  #squared max shape + 30 endlines + 1 end episode
-#     },
-#     '--padding_idx': {
-#         'type': int,
-#         'default': 13,
-#     },
-#     '--resid_pdrop': {
-#         'type': float,
-#         'default': 0.1,
-#     },
-#     '--attn_pdrop': {
-#         'type': float,
-#         'default': 0.1,
-#     },
-#     '--embd_pdrop': {
-#         'type': float,
-#         'default': 0.0,
-#     },
-#     '--n_layer': {
-#         'type': int,
-#         'default': 2,
-#     },
-#     '--n_embd': {
-#         'type': int,
-#         'default': 8,
-#     },
-#     '--n_head': {
-#         'type': int,
-#         'default': 8,
-#     },
-# }
-
-# FLAGS = args_parse.parse_common_options(
-#     datadir='data/datasets/median/',
-#     logdir='data/logs/tensorboard/',
-#     batch_size=8,
-#     momentum=0.5,
-#     lr=0.01,
-#     num_epochs=5,
-#     num_cores=1,
-#     num_workers=1,
-#     log_steps=50,
-#     val_steps=15000,
-#     opts=MODEL_OPTS.items()
-#     )
-
-
 import sys
 import os
 from tqdm import tqdm
@@ -92,7 +19,7 @@ import torch_xla.distributed.parallel_loader as pl
 import torch_xla.test.test_utils as test_utils
 from mingpt.model import GPT
 
-# set up logging
+# # set up logging
 # logging.basicConfig(
 #         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
 #         datefmt="%m/%d/%Y %H:%M:%S",
@@ -295,6 +222,7 @@ def add_train_args(parent_parser):
     parser.add_argument("--val_steps", type=int, default=15000)
     parser.add_argument("--log_dir", type=str)
     parser.add_argument("--fast_run", action='store_true', default=False)
+    parser.add_argument("--log_console", action='store_true', default=False)
     return parser
 
 
@@ -310,6 +238,14 @@ m = GPT(FLAGS)
 MODEL = xmp.MpModelWrapper(m)
 SERIAL_EXEC = xmp.MpSerialExecutor()
 SEED = 333
+
+if(FLAGS.log_console):
+        # set up logging
+    logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
+            datefmt="%m/%d/%Y %H:%M:%S",
+            level=logging.INFO,
+    )
 
 def map_fn(rank, args):
     global FLAGS
