@@ -1,5 +1,6 @@
 import glob
 import json
+import os
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
@@ -9,47 +10,31 @@ from multiprocessing import Pool
 import multiprocessing as mp
 from functools import partial
 from copy import deepcopy
-
-
-# class ColorPermutation():
-#     # x, y, x_test, y_test = data
-
-#     def __init__(self, max_permutations=1000, max_colors=10, data=None):
-#         self.max_permutations = max_permutations
-#         self.max_colors = max_colors
-#         self.name = 'color'
-
-#         if(data is not None):
-#             u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
-#             colors_to_idx = np.zeros(self.max_colors, dtype=np.long)
-#             colors_to_idx[list(u_colors)] = range(len(u_colors))
-#             self.norms = [[colors_to_idx[ep] for ep in d] for d in data]
-#             perms = np.array(list(itertools.permutations(range(self.max_colors), len(u_colors))))
-#             ind = np.random.choice(len(perms), size=min(self.max_permutations, len(perms)), replace=False)
-#             self.permutations = perms[ind]
-
-#     @classmethod 
-#     def from_data(cls, max_permutations, max_colors, data):
-#         return ColorPermutation(max_permutations, max_colors, data)
-
-#     def __len__(self):
-#         return len(self.permutations)
-
-#     def __getitem__(self, id):
-#         permutation = self.permutations[id]
-#         permuted_data = tuple([[permutation[i] for i in d] for d in self.norms])
-#         return permuted_data
-
-
-
-
 from math import factorial
 from itertools import permutations
-class LightWeightColorPermutation():
+
+
+class Transform:
+    "Abstract class which all transformation classes should derive."
+    def __init__(self, limit):
+        self.limit = limit
+
+    def count(self, data):
+        "Return number of all possible transformations for single task. Can't exceed the limit."
+        raise(NotImplementedError())
+
+    def transform_data(self, idx, data):
+        """Return one transformation from all possible for data.
+        `idx` should be less `min(self.limit, self.count(data))`.
+        """
+        raise(NotImplementedError())
+    
+
+class LightWeightColorPermutation(Transform):
     # TODO make shuffling for permutation when limit exists
     # TODO now we take first #limit permutations, it shifts color distribution to first colors (0,1,2,3..)
     def __init__(self, limit=1000, max_colors=10):
-        self.limit = limit
+        super().__init__(limit)
         self.max_colors = max_colors
 
     def P(self, n, r):
@@ -59,27 +44,11 @@ class LightWeightColorPermutation():
     def count(self, data):
         """Number of permutations per one task.
         Find #unique colors in task and then count all permutations. P(n,r).
-        Method should be fast."""
+        """
 
         u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
         c = self.P(self.max_colors, self.max_colors - len(u_colors))
         return min(self.limit, c)
-
-    # @classmethod
-    # def _get_permutation(cls, n, r, idx):
-    #     "Fast equivalent of `list(itertools.permutations(range(n), r))[id]`"
-    #     digits = []
-
-    #     for i in range(r):
-    #         c = cls.P(n - i, r - i)
-    #         q, _ = divmod(c, n - i)
-    #         q1, r1 = divmod(idx, q)
-    #         shift = len(list(filter(lambda x: x <= q1, digits)))
-    #         digits.append(q1 + shift)
-    #         idx = r1
-
-    #     return tuple(digits)
-    #     # return int(''.join(map(str, digits)))
 
     def _get_permutations(self, n, r):
         return list(permutations(range(n), r))
@@ -101,9 +70,10 @@ class LightWeightColorPermutation():
         m = np.zeros(self.max_colors, dtype=np.long)
         m[u_colors] = p
 
-        # replace all data
+        # replace color in all data
         p_data = tuple([[m[ep] for ep in d] for d in data])
         return p_data
+
 
 class LightARCDataset:
     def __init__(self, tasks=None, transforms=None, data_folder='./data'):
@@ -194,53 +164,6 @@ class LightARCDataset:
             return permuted_data
 
 
-    # def filter_tasks(self, filters):
-    #     "Make filter by dataset boolean features."
-
-    #     if(not isinstance(filters, (list, tuple))):
-    #         filters = [filters]
-    #     mask = (self.features[filters] == 1).all(axis=1)
-    #     tasks = self.features.index[mask].tolist()
-    #     return tasks
-
-    # def _add_features(self):
-    #     features_list = \
-    #         ['eq_shape_io', #bool
-    #          'eq_shape_i',  #bool
-    #          'eq_color_i',  #bool
-    #          'eq_color_o']  #bool
-    #     data = []
-
-    #     for t in self.tasks:
-    #         x, y, *_ = self[t]
-    #         pairs = zip(x, y)
-
-    #         # eq_shape_io
-    #         # the same shapes of inputs and outputs by episode
-    #         eq_shape_io = \
-    #             all([np.shape(s[0]) == np.shape(s[1]) for s in pairs])
-
-    #         # eq_shape_i
-    #         # the same shapes of inputs by demo
-    #         shapes = list(map(np.shape, x))
-    #         eq_shape_i = len(set(shapes)) == 1
-
-    #         # eq_color_i
-    #         # the same colors of inputs by demo
-    #         colors = list(map(tuple, map(np.unique, x)))
-    #         eq_color_i = len(set(colors)) == 1
-
-    #         # eq_color_o
-    #         # the same colors of outputs by demo
-    #         colors = list(map(tuple, map(np.unique, y)))
-    #         eq_color_o = len(set(colors)) == 1
-
-    #         data.append((eq_shape_io, eq_shape_i, eq_color_i, eq_color_o))
-
-    #     df = pd.DataFrame(index=self.tasks, columns=features_list, data=data)
-    #     return df
-
-
 class GPTDataset(Dataset):
     """Flat 2D samples and add specials tokens.
     
@@ -251,7 +174,6 @@ class GPTDataset(Dataset):
     Here `flatten` is:
     flat 2D array and add `end_line` in the end of every line.
     """
-    
     def __init__(self, dataset, n_colors, n_context, target_length, padding=False):
         self.dataset = dataset
         self.n_colors = n_colors
@@ -336,7 +258,7 @@ class GPTDataset(Dataset):
 
 
 ###
-### Here you can find different configuraitons of datasets
+### Here you can find different high-level configuraitons of datasets
 ### 
 
 
@@ -348,7 +270,7 @@ from argparse import ArgumentParser
 
 
 class AbstractDataset():
-    "Common object for all datasets"
+    "Common object for all datasets."
     def __init__(
         self,
         datadir,
@@ -368,10 +290,12 @@ class AbstractDataset():
         self.datasets = []
 
         if download:
+            # TODO extract check files logic from next-line func
             try_load_and_save_from_bucket_if_not_exist(datadir, files)
             for f in files:
                 with open(datadir + f, 'rb') as file:
                     self.datasets.append(pickle.load(file))
+        # TODO save after create
         else: self.create_new_dataset(**kwargs)
 
     def create_new_dataset(self, **kwargs):
@@ -418,13 +342,13 @@ class MaxNDataset(AbstractDataset):
             
             # tests
             #check special token counts
-            x, *_ = ds[id]
+            # x, *_ = ds[id]
             # assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x) + 1, "End of episodes missmatched."
             # assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
         #     assert (x_gpt == no_aug_ds.new_line).sum() == len(x) + 1, "Promts missmatched."
             
         lxs = pd.Series(lxs)
-        # md_logger.info('Median length : {}'.format(lxs.median()))
+        self.logger.info('Median length : {}'.format(lxs.median()))
         indices = lxs[lxs <= self.maxn].index.tolist()
         maxn_tasks = np.array(ds.tasks)[indices].tolist()
 
@@ -433,14 +357,15 @@ class MaxNDataset(AbstractDataset):
         train = int(train * len(maxn_tasks))
         test = int(test * len(maxn_tasks))
         train, test, val = np.array_split(maxn_tasks, [train, test + train])
-        self.logger.info('Lengths before transforms. train : {}, test : {}, val : {}'. format(len(train), len(test), len(val)))
+        self.logger.info('Lengths before transforms. train : {}, test : {}, val : {}'.
+            format(*map(len, [train, test, val])))
 
         # make datasets
         tasks = [train, test, val]
         for tasks, transform, file in zip(tasks, self.transforms, self.files):
             arc = LightARCDataset(tasks=tasks, transforms=transform)
             gpt = GPTDataset(arc, self.n_colors, self.maxn, self.target_length, True)
-            with open(self.datadir + file, 'wb') as f:
+            with open(os.path.join(self.datadir, file), 'wb') as f:
                 pickle.dump(gpt, f)
             self.datasets.append(gpt)
 

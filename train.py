@@ -72,6 +72,7 @@
 
 
 import sys
+import os
 from tqdm import tqdm
 from datetime import datetime
 from argparse import ArgumentParser
@@ -105,10 +106,17 @@ def _train_update(suffix, step, loss, tracker, epoch, writer):
     writer.add_scalar(suffix + '/train', loss, step)
 
 
-def get_dataset():
-        train_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=10000)]
-        test_trans = None
-        val_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=100)]
+def get_dataset(fast_run=False):
+        if(fast_run):
+            train_trans = None
+            test_trans = None
+            val_trans = None
+        else:
+            train_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=10000)]
+            test_trans = None
+            val_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=100)]
+
+
         ds = MaxNDataset(
             transforms=[train_trans, test_trans, val_trans],
             **FLAGS.__dict__)
@@ -116,28 +124,32 @@ def get_dataset():
         logger.info("Dataset lenghts: train = {}, test = {}, val = {}".format(len(train), len(test), len(val)))
         return train, test, val
 
+
 def train(rank):
-    set_seed(333)
+    set_seed(SEED)
     global SERIAL_EXEC, MODEL
-    train, test, val = SERIAL_EXEC.run(get_dataset)
+    train, test, val = SERIAL_EXEC.run(lambda: get_dataset(FLAGS.fast_run))
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train,
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
-        shuffle=True)
+        shuffle=True,
+        seed=SEED)
 
     val_sampler = torch.utils.data.distributed.DistributedSampler(
         val,
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
-        shuffle=False)
+        shuffle=False,
+        seed=SEED)
 
     test_sampler = torch.utils.data.distributed.DistributedSampler(
         test,
         num_replicas=xm.xrt_world_size(),
         rank=xm.get_ordinal(),
-        shuffle=False)
+        shuffle=False,
+        seed=SEED)
   
     train_loader = torch.utils.data.DataLoader(
         train,
@@ -167,11 +179,14 @@ def train(rank):
         writer = SummaryWriter()
         FLAGS.log_dir = writer.log_dir
 
-    optimizer = optim.SGD(
-        model.parameters(),
-        lr=FLAGS.lr,
-        momentum=FLAGS.momentum,
-        weight_decay=1e-4)
+    # optimizer = optim.SGD(
+    #     model.parameters(),
+    #     lr=FLAGS.lr,
+    #     momentum=FLAGS.momentum,
+    #     weight_decay=1e-4)
+
+    FLAGS.lr *= xm.xrt_world_size()
+    optimizer = model.configure_optimizers(FLAGS)
 
     def train_loop_fn(loader, epoch):
         # return 100, [23, 32, 333]
@@ -235,11 +250,11 @@ def train(rank):
         return loss_mr
     
     if(xm.is_master_ordinal()):
-        writer.add_hparams(FLAGS.__dict__, dict())
+        writer.add_hparams(FLAGS.__dict__, {'test':123})
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
     test_device_loader = pl.MpDeviceLoader(test_loader, device)
     for epoch in range(1, FLAGS.num_epochs + 1):
-        xm.master_print('epoch {} train begin {}'.format(epoch, test_utils.now()))
+        xm.master_print('epoch {}: train begin {}'.format(epoch, test_utils.now()))
         train_sampler.set_epoch(epoch)
         train_loss, val_losses = train_loop_fn(train_device_loader, epoch)
         test_loss = test_loop_fn(test_device_loader)
@@ -247,16 +262,28 @@ def train(rank):
             'model_state_dict': MODEL._model.cpu().state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             }
-        xm.save(curr_state, sys.path.join(FLAGS.log_dir, f'model_ep{epoch}.pt')
-        # metrics = {'tr_loss':train_loss, 'val_loss':np.mean(val_losses), 'test_loss': test_loss}
-            # writer.add_hparams(FLAGS.__dict__, metrics) 
+        if(xm.is_master_ordinal()):
+            cpu_data = xm._maybe_convert_to_cpu(curr_state, convert=True)
+            torch.save(cpu_data, os.path.join(FLAGS.log_dir, f'model_ep{epoch}.pt'))
+            metrics = {
+                'tr_loss':train_loss,
+                'val_loss':np.mean(val_losses),
+                'test_loss': test_loss}
+            params = {
+                'lr': FLAGS.lr,
+                'epoch':epoch,
+                'batch_size': FLAGS.batch_size,
+                'num_cores': FLAGS.num_cores,
+                }
+            writer.add_hparams(params, metrics) 
+        xm.rendezvous('torch_xla.core.xla_model.save')
+        
         xm.master_print('epoch {} train end {}, train: {:.2f}, val: {:.2f}, test: {:.2f}'.
             format(epoch, test_utils.now(), train_loss, np.mean(val_losses), test_loss))
         MODEL.to(device)
     if(xm.is_master_ordinal()):
         writer.flush()
         writer.close()
-    # return 1
     
 def add_train_args(parent_parser):
     parser = ArgumentParser(parents=[parent_parser], add_help=False)
@@ -267,6 +294,7 @@ def add_train_args(parent_parser):
     parser.add_argument("--log_steps", type=int, default=100)
     parser.add_argument("--val_steps", type=int, default=15000)
     parser.add_argument("--log_dir", type=str)
+    parser.add_argument("--fast_run", action='store_true', default=False)
     return parser
 
 
@@ -274,17 +302,23 @@ parser = add_train_args(ArgumentParser())
 parser = GPT.add_model_specific_args(parser)
 parser = MaxNDataset.add_data_specific_args(parser)
 FLAGS = parser.parse_args()
+# FLAGS.betas = eval(FLAGS.betas)
+# FLAGS.split = eval(FLAGS.split)
 # chkp = torch.load('model.pt', map_location='cpu')
 m = GPT(FLAGS)
 # m.load_state_dict(chkp['model_state_dict'])
 MODEL = xmp.MpModelWrapper(m)
 SERIAL_EXEC = xmp.MpSerialExecutor()
+SEED = 333
 
 def map_fn(rank, args):
     global FLAGS
     FLAGS = args
-    res = train(rank)
+    train(rank)
     # sys.exit(21)
 
 if __name__ == '__main__':
+    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.185.7.138:8470"
+    os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
+    os.environ['XLA_USE_BF16'] = "1"
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.num_cores)

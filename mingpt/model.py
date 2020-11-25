@@ -186,7 +186,9 @@ class GPT(nn.Module):
             {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": train_config.weight_decay},
             {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
         ]
-        optimizer = torch.optim.AdamW(optim_groups, lr=train_config.learning_rate, betas=train_config.betas)
+
+        betas = eval(train_config.betas)
+        optimizer = torch.optim.AdamW(optim_groups, lr=train_config.lr, betas=betas)
         return optimizer
 
     def forward(self, idx, targets=None):
@@ -209,7 +211,7 @@ class GPT(nn.Module):
         loss = None
         if targets is not None:
             logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
-            loss = F.cross_entropy(logits_eval, targets)
+            loss = F.cross_entropy(logits_eval, targets, ignore_index=self.padding_idx)
 
         return logits, loss
 
@@ -226,7 +228,8 @@ class GPT(nn.Module):
         parser.add_argument("--attn_pdrop", type=float, default=0.1)
         parser.add_argument("--resid_pdrop", type=float, default=0.1)
         parser.add_argument("--vocab_size", type=int, default=14)
-        parser.add_argument("--lr", type=float, default=1e-2)
-        parser.add_argument("--weight_decay", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=3e-4)
+        parser.add_argument("--weight_decay", type=float, default=0.1)
         parser.add_argument("--momentum", type=float, default=0.5)
+        parser.add_argument("--betas", type=str, default='(0.9, 0.95)')
         return parser
