@@ -102,17 +102,12 @@ def train(rank):
     device = xm.xla_device()
     model = MODEL.to(device)
     writer = None
-    if xm.is_master_ordinal():
+    if xm.is_master_ordinal(False):
         writer = SummaryWriter()
         FLAGS.log_dir = writer.log_dir
 
-    # optimizer = optim.SGD(
-    #     model.parameters(),
-    #     lr=FLAGS.lr,
-    #     momentum=FLAGS.momentum,
-    #     weight_decay=1e-4)
-
-    FLAGS.lr *= xm.xrt_world_size()
+    if(FLAGS.scale_lr):
+        FLAGS.lr *= xm.xrt_world_size()
     optimizer = model.configure_optimizers(FLAGS)
 
     def train_loop_fn(loader, epoch):
@@ -189,7 +184,7 @@ def train(rank):
             'model_state_dict': MODEL._model.cpu().state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             }
-        if(xm.is_master_ordinal()):
+        if(xm.is_master_ordinal(local=False)):
             cpu_data = xm._maybe_convert_to_cpu(curr_state, convert=True)
             torch.save(cpu_data, os.path.join(FLAGS.log_dir, f'model_ep{epoch}.pt'))
             metrics = {
@@ -208,7 +203,7 @@ def train(rank):
         xm.master_print('epoch {} train end {}, train: {:.2f}, val: {:.2f}, test: {:.2f}'.
             format(epoch, test_utils.now(), train_loss, np.mean(val_losses), test_loss))
         MODEL.to(device)
-    if(xm.is_master_ordinal()):
+    if(xm.is_master_ordinal(local=False)):
         writer.flush()
         writer.close()
     
@@ -223,6 +218,7 @@ def add_train_args(parent_parser):
     parser.add_argument("--log_dir", type=str)
     parser.add_argument("--fast_run", action='store_true', default=False)
     parser.add_argument("--log_console", action='store_true', default=False)
+    parser.add_argument("--scale_lr", action='store_true', default=False)
     return parser
 
 
@@ -240,7 +236,6 @@ SERIAL_EXEC = xmp.MpSerialExecutor()
 SEED = 333
 
 if(FLAGS.log_console):
-        # set up logging
     logging.basicConfig(
             format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
             datefmt="%m/%d/%Y %H:%M:%S",
@@ -251,10 +246,13 @@ def map_fn(rank, args):
     global FLAGS
     FLAGS = args
     train(rank)
+
+    # Barrier to prevent master from exiting before workers connect.
+    xm.rendezvous('exit')
     # sys.exit(21)
 
 if __name__ == '__main__':
-    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.185.7.138:8470"
+    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.73.209.10:8470"
     os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
     os.environ['XLA_USE_BF16'] = "1"
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.num_cores)

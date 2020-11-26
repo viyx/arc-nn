@@ -47,7 +47,7 @@ class LightWeightColorPermutation(Transform):
         """
 
         u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
-        c = self.P(self.max_colors, self.max_colors - len(u_colors))
+        c = self.P(self.max_colors, len(u_colors))
         return min(self.limit, c)
 
     def _get_permutations(self, n, r):
@@ -121,7 +121,6 @@ class LightARCDataset:
     def __getitem__(self, id):
         "Find task and make tranformations."
 
-
         # convert id to taskname if no transorms
         if(type(id) is int and self.transforms is None):
             id = self.tasks[id]
@@ -148,20 +147,65 @@ class LightARCDataset:
                 return train_x, train_y, test_x, test_y
         else:
             # find original task for `id` and make all transforms
-            original_task_idx = np.searchsorted(self.breaks, id) - 1
+            original_task_idx = np.searchsorted(self.breaks, id)
             original_taskname = self.tasks[original_task_idx] # str
             original_data = self[original_taskname]
             
-            break_len = self.breaks[original_task_idx + 1] - self.breaks[original_task_idx]
             permuted_data = original_data
+            id -= self.breaks[original_task_idx]
             # get index for each transform and do transform
             for t in self.transforms:
                 c = t.count(original_data)
-                q, r = divmod(break_len, c)
+                q, r = divmod(id, c)
                 permuted_data = t.transform_data(q, permuted_data)
-                break_len = r
+                id = r
 
             return permuted_data
+
+    def plot(self, id):
+        import matplotlib.pyplot as plt
+        from matplotlib import colors
+
+        def plot_one(ax, data, train_or_test, input_or_output):
+            cmap = colors.ListedColormap(
+                ['#000000', '#0074D9','#FF4136','#2ECC40','#FFDC00',
+                '#AAAAAA', '#F012BE', '#FF851B', '#7FDBFF', '#870C25'])
+            norm = colors.Normalize(vmin=0, vmax=9)
+            
+            ax.imshow(data, cmap=cmap, norm=norm)
+            ax.grid(True,which='both',color='lightgrey', linewidth=0.5)    
+            ax.set_yticks([x-0.5 for x in range(1+len(data))])
+            ax.set_xticks([x-0.5 for x in range(1+len(data[0]))])     
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            ax.set_title(train_or_test + ' '+input_or_output)
+
+        def plot_task(task):
+            """
+            Plots the first train and test pairs of a specified task,
+            using same color scheme as the ARC app
+            """    
+            x_train, y_train, x_test, y_test = task
+            num_train = len(x_train)
+            _, axs = plt.subplots(2, num_train, figsize=(3*num_train,3*2))
+            for i in range(num_train):     
+                plot_one(axs[0,i], x_train[i],'train','input')
+                plot_one(axs[1,i], y_train[i],'train','output')        
+            plt.tight_layout()
+            plt.show()        
+                
+            num_test = len(x_test)
+            _, axs = plt.subplots(2, num_test, figsize=(3*num_test,3*2), squeeze=False)
+            
+            for i in range(num_test):
+                plot_one(axs[0,i], x_test[i],'test','input')
+                plot_one(axs[1,i], y_test[i],'test','output')  
+            plt.tight_layout()
+            plt.show() 
+        
+        item = self[id]
+        plot_task(item)
+        
 
 
 class GPTDataset(Dataset):
