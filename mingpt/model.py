@@ -1,12 +1,3 @@
-"""
-GPT model:
-- the initial stem consists of a combination of token encoding and a positional encoding
-- the meat of it is a uniform sequence of Transformer blocks
-    - each Transformer is a sequential combination of a 1-hidden-layer MLP block and a self-attention block
-    - all blocks feed into a central residual pathway similar to resnets
-- the final decoder is a linear projection into a vanilla Softmax classifier
-"""
-
 import math
 import logging
 from argparse import ArgumentParser
@@ -16,24 +7,6 @@ from torch.nn import functional as F
 
 logger = logging.getLogger(__name__)
 
-class GPTConfig:
-    """ base GPT config, params common to all GPT versions """
-    embd_pdrop = 0.1
-    resid_pdrop = 0.1
-    attn_pdrop = 0.1
-
-    def __init__(self, vocab_size, block_size, **kwargs):
-        self.vocab_size = vocab_size
-        self.block_size = block_size
-        # self.masked_length = n_y
-        for k,v in kwargs.items():
-            setattr(self, k, v)
-
-class GPT1Config(GPTConfig):
-    """ GPT-1 like network roughly 125M params """
-    # n_layer = 1
-    # n_head = 4
-    # n_embd = 768
 
 class CausalSelfAttention(nn.Module):
     """
@@ -55,12 +28,12 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
         # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer("mask_tril", torch.tril(torch.ones(config.block_size, config.block_size))
-                                     .view(1, 1, config.block_size, config.block_size))
+        self.register_buffer("mask_tril", torch.tril(torch.ones(config.n_context, config.n_context))
+                                     .view(1, 1, config.n_context, config.n_context))
         # tcontext mask to ensure we dont learn predict context itself
-        self.register_buffer("mask_rect", torch.cat([torch.zeros((config.block_size - config.target_length, config.block_size)),
-                                    torch.ones((config.target_length, config.block_size))])
-                                     .view(1, 1, config.block_size, config.block_size))
+        # self.register_buffer("mask_rect", torch.cat([torch.zeros((config.n_context - config.target_length, config.n_context)),
+                                    # torch.ones((config.target_length, config.n_context))])
+                                    #  .view(1, 1, config.n_context, config.n_context))
         self.n_head = config.n_head
 
     def forward(self, x, layer_past=None):
@@ -75,7 +48,7 @@ class CausalSelfAttention(nn.Module):
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask_tril[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
+        # att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -111,27 +84,75 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.padding_idx = config.padding_idx
-        self.block_size = config.block_size
-        # positions start from `1` as `0` token reserved as padding index
-        self.register_buffer('positions', torch.arange(1,self.block_size+1))
+        self.pad_token = config.pad_token
+        self.promt_token = config.promt_token
+        self.end_episode_token = config.end_episode_token
+        self.block_size = config.n_context
+        self.target_size = config.target_length
+
+
+        # positions start from `1` as `0` token reserved as padding index for positions
+        self.register_buffer('arange', torch.arange(1, self.target_size+1))
+        # self.register_buffer('pos', torch.zeros(self.block_size))
+        # self.register_buffer('posAB', torch.zeros(self.block_size))
+
         # input embedding stem
-        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.padding_idx)
-        # self.pos_emb = nn.Parameter(torch.zeros(1, config.n_context, config.n_embd))
-        self.pos_emb = nn.Embedding(config.block_size + 1, config.n_embd, padding_idx=0)
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.pad_token)
+        self.pos_emb = nn.Embedding(self.block_size + 1, config.n_embd, padding_idx=0)
+        self.pos_emb_ab = nn.Embedding(2 + 1, config.n_embd, padding_idx=0)
         self.drop = nn.Dropout(config.embd_pdrop)
+
         # transformer
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-
         logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
 
-    # def get_block_size(self):
-    #     return self.block_size
+    def forward(self, idx, targets=None):
+        b, t = idx.size()
+        assert t <= self.block_size * 3, "Cannot forward, model block size is exhausted."
+
+        idx = idx.view(b,3,-1)
+        # forward the GPT model
+        # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
+
+
+        # for token in 
+        # positions = self.positions.masked_fill((idx == self.pad_token).to(idx.device), 0)
+        
+        # first_not_pad_idx = torch.nonzero(idx != self.pad_token)[0]
+
+        # len(end_eps) - len(promts) = 1
+        # promts = torch.nonzero(idx != self.promt_token)
+        # end_eps = torch.cat([first_not_pad_idx, torch.nonzero(idx != self.end_episode_token)])
+
+        # for i in range(len(promts)):
+        #     self.pos[end_eps[i]:promts[i]+1] = self.arange[promts[i]-end_eps[i]+1:]
+        #     self.posAB[end_eps[i]:promts[i]+1] = 1 # x
+        #     self.pos[promts[i]:end_eps[i+1]+1] = self.arange[end_eps[i+1]-promts[i]+1:]
+        #     self.posAB[promts[i]:end_eps[i+1]+1] = 2 # y
+
+        #set `0` for positions with padding index
+        # positions = self.arange.masked_fill((idx == self.padding_idx).to(idx.device), 0)
+        token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
+        pos_embeddings = self.pos_emb(idx[:,1,:])
+        pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
+        x = self.drop(token_embeddings + pos_embeddings + pos_ab_embeddings)
+        x = self.blocks(x)
+        x = self.ln_f(x)
+        logits = self.head(x)
+
+        # if we are given some desired targets also calculate the loss
+        loss = None
+        if targets is not None:
+            logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
+            loss = F.cross_entropy(logits_eval, targets, ignore_index=self.pad_token)
+
+        return logits, loss
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -191,36 +212,10 @@ class GPT(nn.Module):
         optimizer = torch.optim.AdamW(optim_groups, lr=train_config.lr, betas=betas)
         return optimizer
 
-    def forward(self, idx, targets=None):
-        b, t = idx.size()
-        assert t <= self.block_size, "Cannot forward, model block size is exhausted."
-
-        # forward the GPT model
-        token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
-        # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
-
-        #set `0` for positions with padding index
-        positions = self.positions.masked_fill((idx == self.padding_idx).to(idx.device), 0)
-        position_embeddings = self.pos_emb(positions)
-        x = self.drop(token_embeddings + position_embeddings)
-        x = self.blocks(x)
-        x = self.ln_f(x)
-        logits = self.head(x)
-
-        # if we are given some desired targets also calculate the loss
-        loss = None
-        if targets is not None:
-            logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
-            loss = F.cross_entropy(logits_eval, targets, ignore_index=self.padding_idx)
-
-        return logits, loss
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--padding_idx", type=int, default=13)
-        parser.add_argument("--block_size", type=int, default=2048)
-        parser.add_argument("--target_length", type=int, default=30*30+30+1)
         parser.add_argument("--n_embd", type=int, default=8)
         parser.add_argument("--n_head", type=int, default=2)
         parser.add_argument("--n_layer", type=int, default=2)

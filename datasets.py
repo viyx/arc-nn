@@ -12,6 +12,7 @@ from functools import partial
 from copy import deepcopy
 from math import factorial
 from itertools import permutations
+from functools import lru_cache
 
 
 class Transform:
@@ -45,11 +46,13 @@ class LightWeightColorPermutation(Transform):
         """Number of permutations per one task.
         Find #unique colors in task and then count all permutations. P(n,r).
         """
-
         u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
         c = self.P(self.max_colors, len(u_colors))
         return min(self.limit, c)
 
+    # may be removed when net is large and time to perform the operation ~ batch forwarding time
+    # cache ~ 1GB per dataloader process
+    @lru_cache()
     def _get_permutations(self, n, r):
         return list(permutations(range(n), r))
 
@@ -57,7 +60,6 @@ class LightWeightColorPermutation(Transform):
         """Get permutated data.
         Find unique colors in data, then estimate permutation for them
         and replace data with the permutation.
-
         """
         assert idx <= self.limit, "Id should be less or equal then limit. Check caller function."
         u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
@@ -85,21 +87,21 @@ class LightARCDataset:
             assert len(tasks) >= 1, 'Specify at least one task.'
             self.tasks = tasks
 
-        # populate breaks for futher navigation througout transforms
+        # populate intervals for futher navigation througout transforms
         # each transform has `count()` method which returns #n new tasks
-        # we record #n transformations per task in `breaks` which contain intervals
+        # we record #n transformations per task in `intervals` which contain intervals
         if transforms:
-            breaks = [0]
+            intervals = [0]
             for task in self.tasks:
                 per_task_cnt = 0
                 for tr in transforms:
                     per_task_cnt += tr.count(self[task])
-                breaks.append(per_task_cnt)
+                intervals.append(per_task_cnt)
             
-            # `breaks` will contain breaks for all dataset.
+            # `intervals` will contain intervals for all dataset.
             # for example, (break[1] - break[0]) shows transformation count for first task
-            self.breaks = np.cumsum(breaks)
-            assert len(self.breaks) == len(self.tasks) + 1
+            self.intervals = np.cumsum(intervals)
+            assert len(self.intervals) == len(self.tasks) + 1
 
         self.transforms = transforms
 
@@ -114,7 +116,7 @@ class LightARCDataset:
 
     def __len__(self):
         if self.transforms:
-            return self.breaks[-1]
+            return self.intervals[-1]
         else:
             return len(self.tasks)
 
@@ -146,13 +148,15 @@ class LightARCDataset:
                 # list(np.array(ndim=2)), list(np.array(ndim=2)) ...
                 return train_x, train_y, test_x, test_y
         else:
+            assert id < len(self)
+
             # find original task for `id` and make all transforms
-            original_task_idx = np.searchsorted(self.breaks, id)
+            original_task_idx = np.searchsorted(self.intervals, id) - 1
             original_taskname = self.tasks[original_task_idx] # str
             original_data = self[original_taskname]
             
             permuted_data = original_data
-            id -= self.breaks[original_task_idx]
+            id -= self.intervals[original_task_idx]
             # get index for each transform and do transform
             for t in self.transforms:
                 c = t.count(original_data)
@@ -207,7 +211,6 @@ class LightARCDataset:
         plot_task(item)
         
 
-
 class GPTDataset(Dataset):
     """Flat 2D samples and add specials tokens.
     
@@ -218,21 +221,25 @@ class GPTDataset(Dataset):
     Here `flatten` is:
     flat 2D array and add `end_line` in the end of every line.
     """
-    def __init__(self, dataset, n_colors, n_context, target_length, padding=False):
+    def __init__(self, dataset, config):
         self.dataset = dataset
-        self.n_colors = n_colors
-        self.n_context = n_context
-        self.padding = padding # expand x to n_context
+        self.n_colors = config.n_colors
+        self.n_context = config.n_context
+        self.padding = config.padding # expand x to n_context
         # max flatten y size with special tokens(30 end_lines,1 end_episode)
-        self.target_length = target_length
+        self.target_length = config.target_length
         
         # make special tokens 
-        self.end_line_token = n_colors + 0    # array of shape (10, 3) has 10 end_lines
-        self.promt_token = n_colors + 1       # promt after every x
-        self.end_episode_token = n_colors + 2 # end of episode
-        self.pad_token = n_colors + 3       # padding token (expand to n_context from the begining)
+        self.end_line_token =  config.end_line_token           # array of shape (10, 3) has 10 end_lines
+        self.promt_token = config.promt_token                  # promt after every x
+        self.end_episode_token = config.end_episode_token      # end of episode
+        self.pad_token = config.pad_token                      # padding token (expand to n_context from the begining)
+
+        # check similarity
+        assert len(set([self.end_line_token, self.pad_token, self.promt_token, self.end_episode_token])) == 4
         
-        self.vocab_size = n_colors + 4
+        # add 4 special token
+        self.vocab_size = config.n_colors + 4
         
     def __len__(self):
         return len(self.dataset)
@@ -249,10 +256,12 @@ class GPTDataset(Dataset):
         x = self.flat_2D_field(x)
         y = self.flat_2D_field(y)
         return np.concatenate([x, self.promt_token, y, self.end_episode_token], axis=None)
-    
-    def pad(self, seq, to, direct):
+
+    # TODO replace `pad` with `np.pad`
+    # TODO not pass if no padding needed
+    def pad(self, seq, to, direct, pad_token):
         "Pad sequence to left or right."
-        x = np.array([self.pad_token] * to, dtype=np.long)
+        x = np.array([pad_token] * to, dtype=np.long)
         if(direct == 'left'):
             x[-len(seq):] = seq
         if(direct == 'right'):
@@ -280,25 +289,84 @@ class GPTDataset(Dataset):
         
         # pad y to max flattened 2D field
         if(len(y) < self.target_length and self.padding):
-            y = self.pad(y, self.target_length, 'right')
+            y = self.pad(y, self.target_length, 'right', self.pad_token)
         
         # context: concat all
         x = np.concatenate([xy_train, x_test, self.promt_token, y[:-1]], axis=None)
         
         # padding
         if(len(x) < self.n_context and self.padding): # expand sample to n_context
-            x = self.pad(x, self.n_context, 'left')
+            x = self.pad(x, self.n_context, 'left', self.pad_token)
             
-        # we dont make shift like x = data[:-1], y = data[1:] to decrease memory flow
-        # we will cut predictions to max_target_size in model in order to calculate criterion
-        # len(x) = n_context, len(y) = max_target_size
+        # we dont make shift like x = data[:-1], y = data[1:] to decrease data flow
+        # we will cut predictions to target_length in model in order to calculate criterion
+        # len(x) = n_context, len(y) = target_length
         return x, y
     
     def __getitem__(self, id):
         "Get raw example, then flat it and add special symbols."
         x, y, x_test, y_test = self.dataset[id]
+        
+        # this ugly code add position tokens
+        # you can see result below
+        # TODO move positinal tokens to ARCDataset
+        xy_train_pos = []
+        xy_train_pos_ab = []
+        for i in range(len(x)):
+            x_ = ((x[i].shape[0])*(x[i].shape[1]+1))+1
+            y_ = ((y[i].shape[0])*(y[i].shape[1]+1))+1
+            xy_train_pos.extend(np.concatenate((np.arange(1,x_+1), np.arange(1,y_+1))))
+
+            xy_train_pos_ab.extend([1]*x_)
+            xy_train_pos_ab.extend([2]*y_)
+
+        x_ = ((x_test[0].shape[0])*(x_test[0].shape[1]+1))+1
+        y_ = ((y_test[0].shape[0])*(y_test[0].shape[1]+1))+1
+        y_ = np.arange(1,y_+1)
+
+        # pad y to max flattened 2D field
+        if(len(y_) < self.target_length and self.padding):
+            y_ = self.pad(y_, self.target_length, 'right', 0)
+        xy_test_pos = np.concatenate((np.arange(1,x_+1), y_[:-1]))
+        xy_test_pos_ab = []
+        xy_test_pos_ab.extend([1]*x_)
+        xy_test_pos_ab.extend([2]*(len(y_)-1))
+
+        xy_train_pos.extend(xy_test_pos)
+
+        # padding
+        if(len(xy_train_pos) < self.n_context and self.padding):
+            xy_train_pos = self.pad(xy_train_pos, self.n_context, 'left', 0)
+
+        xy_train_pos_ab.extend(xy_test_pos_ab)
+        # padding
+        if(len(xy_train_pos_ab) < self.n_context and self.padding):
+            xy_train_pos_ab = self.pad(xy_train_pos_ab, self.n_context, 'left', 0)
+
         x, y = self.flat_all_sample(x, y, x_test, y_test)
+
+        # add positional tokens separately for each episode
+        # example
+        #                   |---------------------------x-----------------------|--------------------y----------------|
+        # main tokens:      [<pad>, <pad>, <pad>, <pad>, <pad>, 5 ,7 ,6, <promt>, 8, 2, 3, <end_episode>, <pad>, <pad>]
+        # pos tokens:       [0,     0,      0,      0,      0,  1 ,2 ,3,    4,    1, 2, 3,      4,           0,      0]
+        # pos_ab tokens:    [0,     0,      0,      0,      0,  1 ,1 ,1,    1,    2, 2, 2,      2,           0,      0]
+
+        x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
         return x, y
+
+    @staticmethod
+    def add_data_specific_args(parent_parser):
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--target_length", type=int, default=30*30+30+1)
+        parser.add_argument("--n_colors", type=int, default=10)
+        parser.add_argument("--n_context", type=int, default=2048)
+        parser.add_argument("--padding", default=True, action='store_true')
+        parser.add_argument("--end_line_token", type=int, default=10)
+        parser.add_argument("--promt_token", type=int, default=11)
+        parser.add_argument("--end_episode_token", type=int, default=12)
+        parser.add_argument("--pad_token", type=int, default=13)
+        return parser
 
 
 ###
@@ -315,34 +383,28 @@ from argparse import ArgumentParser
 
 class AbstractDataset():
     "Common object for all datasets."
-    def __init__(
-        self,
-        datadir,
-        download=True,
+    def __init__(self,
+        config,
         files=['train.pickle', 'test.pickle', 'val.pickle'],
-        transforms=[None, None, None],  # train, test, val transformations
-        split = '(0.8,0.1,0.1)',
-        *args,
-        **kwargs):
+        ):
 
-        self.split = eval(split)
+        self.split = eval(config.split)
         assert sum(self.split) == 1
-        Path(datadir).mkdir(parents=True, exist_ok=True)
-        self.datadir = datadir
+        Path(config.datadir).mkdir(parents=True, exist_ok=True)
+        self.datadir = config.datadir
         self.files = files
-        self.transforms = transforms
         self.datasets = []
 
-        if download:
+        if config.download:
             # TODO extract check files logic from next-line func
-            try_load_and_save_from_bucket_if_not_exist(datadir, files)
+            try_load_and_save_from_bucket_if_not_exist(self.datadir, files)
             for f in files:
-                with open(datadir + f, 'rb') as file:
+                with open(self.datadir + f, 'rb') as file:
                     self.datasets.append(pickle.load(file))
         # TODO save after create
-        else: self.create_new_dataset(**kwargs)
+        else: self.create_new_dataset()
 
-    def create_new_dataset(self, **kwargs):
+    def create_new_dataset(self):
         raise(NotImplementedError())
 
     @classmethod
@@ -350,7 +412,6 @@ class AbstractDataset():
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
         parser.add_argument("--split", type=str, default='(0.8,0.1,0.1)')
         parser.add_argument("--download", action="store_true")
-        # parser.add_argument("--datadir", type=str, default='./data/datasets/default/')
         return parser
 
 
@@ -359,37 +420,29 @@ class MaxNDataset(AbstractDataset):
     # TODO api for building datasets
     def __init__(
         self,
-        target_length,
-        n_colors=10,
-        maxn=2048, # median lenght is ~2048
-        # datadir='data/datasets/maxn/',
-        *args,
-        **kwargs):
-
+        config,
+        transforms=[None, None, None],  # train, test, val transformations
+        ):
         self.logger = logging.getLogger('MaxNDataset')
-        self.maxn = maxn
-        self.target_length = target_length
-        self.n_colors = n_colors
-        super().__init__(*args, **kwargs)
+        self.maxn = config.maxn
+        self.config = config
+        self.target_length = config.target_length
+        self.n_colors = config.n_colors
+        self.padding = config.padding
+        self.transforms = transforms
+        super().__init__(config=config)
 
-    def create_new_dataset(self, **kwargs):
+    def create_new_dataset(self):
         "Find tasks with length <= maxn. Create train, test, val datasets."
 
         # find tasks with length <= maxn
         ds = LightARCDataset()
-        gpt_ds = GPTDataset(ds, self.n_colors, self.maxn, self.target_length, True)
+        gpt_ds = GPTDataset(ds, self.config)
         lxs = []
 
         for id in range(len(ds)):
             x_gpt, _ =  gpt_ds[id]
-            lxs.append(len(x_gpt))
-            
-            # tests
-            #check special token counts
-            # x, *_ = ds[id]
-            # assert (x_gpt == gpt_ds.end_episode_token).sum() == len(x) + 1, "End of episodes missmatched."
-            # assert (x_gpt == gpt_ds.promt_token).sum() == len(x) + 1, "Promts missmatched."
-        #     assert (x_gpt == no_aug_ds.new_line).sum() == len(x) + 1, "Promts missmatched."
+            lxs.append(len(x_gpt) / 3)
             
         lxs = pd.Series(lxs)
         self.logger.info('Median length : {}'.format(lxs.median()))
@@ -408,7 +461,7 @@ class MaxNDataset(AbstractDataset):
         tasks = [train, test, val]
         for tasks, transform, file in zip(tasks, self.transforms, self.files):
             arc = LightARCDataset(tasks=tasks, transforms=transform)
-            gpt = GPTDataset(arc, self.n_colors, self.maxn, self.target_length, True)
+            gpt = GPTDataset(arc, self.config)
             with open(os.path.join(self.datadir, file), 'wb') as f:
                 pickle.dump(gpt, f)
             self.datasets.append(gpt)
@@ -420,10 +473,9 @@ class MaxNDataset(AbstractDataset):
     def add_data_specific_args(cls, parent_parser):
         parent_parser = super().add_data_specific_args(parent_parser)
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        # parser.add_argument("--target_length", type=int, default=30*30+30+1)
         parser.add_argument("--maxn", type=int, default=2048)
-        parser.add_argument("--n_colors", type=int, default=10)
         parser.add_argument("--datadir", type=str, default='data/datasets/maxn/')
+        parser = GPTDataset.add_data_specific_args(parser)
         return parser
 
 ###

@@ -19,15 +19,7 @@ import torch_xla.distributed.parallel_loader as pl
 import torch_xla.test.test_utils as test_utils
 from mingpt.model import GPT
 
-# # set up logging
-# logging.basicConfig(
-#         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-#         datefmt="%m/%d/%Y %H:%M:%S",
-#         level=logging.INFO,
-# )
-
 logger = logging.getLogger(__name__)
-
 
 def _train_update(suffix, step, loss, tracker, epoch, writer):
     writer.add_scalar(suffix + '/train', loss, step)
@@ -39,14 +31,10 @@ def get_dataset(fast_run=False):
             test_trans = None
             val_trans = None
         else:
-            train_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=10000)]
+            train_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=1000)]
             test_trans = None
             val_trans = [LightWeightColorPermutation(max_colors=FLAGS.n_colors, limit=100)]
-
-
-        ds = MaxNDataset(
-            transforms=[train_trans, test_trans, val_trans],
-            **FLAGS.__dict__)
+        ds = MaxNDataset(transforms=[train_trans, test_trans, val_trans], config=FLAGS)
         train, test, val = ds.datasets
         logger.info("Dataset lenghts: train = {}, test = {}, val = {}".format(len(train), len(test), len(val)))
         return train, test, val
@@ -102,7 +90,7 @@ def train(rank):
     device = xm.xla_device()
     model = MODEL.to(device)
     writer = None
-    if xm.is_master_ordinal(False):
+    if xm.is_master_ordinal(True):
         writer = SummaryWriter()
         FLAGS.log_dir = writer.log_dir
 
@@ -160,15 +148,16 @@ def train(rank):
         tracker = xm.RateTracker()
         loss_mean = 0.0
         tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal() else loader
-        for step, (data, target) in enumerate(tq):
-            _, loss = model(data, target)
-            loss = loss.mean()
-            loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
-            tracker.add(FLAGS.batch_size)
-            loss_mr = xm.mesh_reduce('loss_test', loss_mean, np.mean)
-            if(xm.is_master_ordinal()):
-                tq.set_description(f"epoch {epoch}: test loss {loss_mr:.5f}")
-                xm.add_step_closure(_train_update, args=('test', epoch, loss_mr, None, epoch, writer))
+        with torch.no_grad():
+            for step, (data, target) in enumerate(tq):
+                _, loss = model(data, target)
+                loss = loss.mean()
+                loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
+                tracker.add(FLAGS.batch_size)
+                loss_mr = xm.mesh_reduce('loss_test', loss_mean, np.mean)
+                if(xm.is_master_ordinal()):
+                    tq.set_description(f"epoch {epoch}: test loss {loss_mr:.5f}")
+                    xm.add_step_closure(_train_update, args=('test', epoch, loss_mr, None, epoch, writer))
         return loss_mr
     
     if(xm.is_master_ordinal()):
@@ -184,7 +173,7 @@ def train(rank):
             'model_state_dict': MODEL._model.cpu().state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             }
-        if(xm.is_master_ordinal(local=False)):
+        if(xm.is_master_ordinal(local=True)):
             cpu_data = xm._maybe_convert_to_cpu(curr_state, convert=True)
             torch.save(cpu_data, os.path.join(FLAGS.log_dir, f'model_ep{epoch}.pt'))
             metrics = {
@@ -203,7 +192,7 @@ def train(rank):
         xm.master_print('epoch {} train end {}, train: {:.2f}, val: {:.2f}, test: {:.2f}'.
             format(epoch, test_utils.now(), train_loss, np.mean(val_losses), test_loss))
         MODEL.to(device)
-    if(xm.is_master_ordinal(local=False)):
+    if(xm.is_master_ordinal(local=True)):
         writer.flush()
         writer.close()
     
@@ -223,8 +212,8 @@ def add_train_args(parent_parser):
 
 
 parser = add_train_args(ArgumentParser())
-parser = GPT.add_model_specific_args(parser)
 parser = MaxNDataset.add_data_specific_args(parser)
+parser = GPT.add_model_specific_args(parser)
 FLAGS = parser.parse_args()
 # FLAGS.betas = eval(FLAGS.betas)
 # FLAGS.split = eval(FLAGS.split)
@@ -252,7 +241,7 @@ def map_fn(rank, args):
     # sys.exit(21)
 
 if __name__ == '__main__':
-    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.73.209.10:8470"
+    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.162.83.122:8470"
     os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
     os.environ['XLA_USE_BF16'] = "1"
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.num_cores)
