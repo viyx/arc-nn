@@ -17,6 +17,7 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.config = config
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads
         self.key = nn.Linear(config.n_embd, config.n_embd)
@@ -28,6 +29,8 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
         # causal mask to ensure that attention is only applied to the left in the input sequence
+        # self.register_buffer("mask_tril", torch.tril(torch.ones(config.n_context, config.n_context))[-config.target_length:]
+                                    #  .view(1, 1, config.target_length, config.n_context))
         self.register_buffer("mask_tril", torch.tril(torch.ones(config.n_context, config.n_context))
                                      .view(1, 1, config.n_context, config.n_context))
         # tcontext mask to ensure we dont learn predict context itself
@@ -39,16 +42,36 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x, layer_past=None):
         B, T, C = x.size()
 
+        # T_target = T - self.config.n_context + self.config.target_length
+        # x_target = x[:,-T_target:,:]
+
+        # k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T_target, hs)
+        # q = self.query(x_target).view(B, T_target, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # # # causal self-attention; Self-attend: (B, nh, T_target, hs) x (B, nh, hs, T) -> (B, nh, T_target, T)
+        # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        # att = att.masked_fill(self.mask_tril[:,:,-T_target:,-T:] == 0, float('-inf'))
+        # att = F.softmax(att, dim=-1)
+        # att = self.attn_drop(att)
+        # y = att @ v # (B, nh, T_target, T) x (B, nh, T, hs) -> (B, nh, T_target, hs)
+        # y = y.transpose(1, 2).contiguous().view(B, T_target, C) # re-assemble all head outputs side by side
+
+        # # # output projection
+        # y = self.resid_drop(self.proj(y))
+        # y = torch.cat([x[:,:-T_target,:], y], dim=1)
+        # return y
+
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask_tril[:,:,:T,:T] == 0, float('-inf'))
         att = F.softmax(att, dim=-1)
-        # att = att.masked_fill(self.mask_rect[:,:,:T,:T] == 0, 0.0) #hide perm context from backward pass
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -88,7 +111,7 @@ class GPT(nn.Module):
         self.promt_token = config.promt_token
         self.end_episode_token = config.end_episode_token
         self.block_size = config.n_context
-        self.target_size = config.target_length
+        self.target_size = config.target_length # TODO rename
 
 
         # positions start from `1` as `0` token reserved as padding index for positions
@@ -114,9 +137,10 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
-        assert t <= self.block_size * 3, "Cannot forward, model block size is exhausted."
+        token_layers = 3
+        assert t <= self.block_size * token_layers, "Cannot forward, model block size is exhausted."
 
-        idx = idx.view(b,3,-1)
+        # idx = idx.view(b, token_layers, -1)
         # forward the GPT model
         # position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
 
@@ -138,10 +162,12 @@ class GPT(nn.Module):
 
         #set `0` for positions with padding index
         # positions = self.arange.masked_fill((idx == self.padding_idx).to(idx.device), 0)
-        token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
-        pos_embeddings = self.pos_emb(idx[:,1,:])
-        pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
-        x = self.drop(token_embeddings + pos_embeddings + pos_ab_embeddings)
+        token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
+        # token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
+        # pos_embeddings = self.pos_emb(idx[:,1,:])
+        # pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
+        # x = self.drop(token_embeddings + pos_embeddings + pos_ab_embeddings)
+        x = self.drop(token_embeddings)
         x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.head(x)
@@ -149,7 +175,7 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            logits_eval = logits[:,-targets.shape[1]:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
+            logits_eval = logits[:,-self.target_size:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
             loss = F.cross_entropy(logits_eval, targets, ignore_index=self.pad_token)
 
         return logits, loss

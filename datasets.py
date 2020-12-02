@@ -31,7 +31,7 @@ class Transform:
         raise(NotImplementedError())
     
 
-class LightWeightColorPermutation(Transform):
+class ColorPermutation(Transform):
     # TODO make shuffling for permutation when limit exists
     # TODO now we take first #limit permutations, it shifts color distribution to first colors (0,1,2,3..)
     def __init__(self, limit=1000, max_colors=10):
@@ -77,7 +77,7 @@ class LightWeightColorPermutation(Transform):
         return p_data
 
 
-class LightARCDataset:
+class ARCDataset:
     def __init__(self, tasks=None, transforms=None, data_folder='./data'):
         if(tasks is None): # load all tasks
             train_tasks = glob.glob(data_folder + '/training/*.json')
@@ -166,7 +166,7 @@ class LightARCDataset:
 
             return permuted_data
 
-    def plot(self, id):
+    def plot(self, id, predictions=None):
         import matplotlib.pyplot as plt
         from matplotlib import colors
 
@@ -194,9 +194,9 @@ class LightARCDataset:
             _, axs = plt.subplots(2, num_train, figsize=(3*num_train,3*2))
             for i in range(num_train):     
                 plot_one(axs[0,i], x_train[i],'train','input')
-                plot_one(axs[1,i], y_train[i],'train','output')        
+                plot_one(axs[1,i], y_train[i],'train','output')
             plt.tight_layout()
-            plt.show()        
+            plt.show()
                 
             num_test = len(x_test)
             _, axs = plt.subplots(2, num_test, figsize=(3*num_test,3*2), squeeze=False)
@@ -205,8 +205,18 @@ class LightARCDataset:
                 plot_one(axs[0,i], x_test[i],'test','input')
                 plot_one(axs[1,i], y_test[i],'test','output')  
             plt.tight_layout()
-            plt.show() 
-        
+            plt.show()
+
+            if(predictions):
+                num_preds = len(predictions)
+                _, axs = plt.subplots(2, num_preds, figsize=(3*num_preds,3*2), squeeze=False)
+                
+                for i in range(num_preds):
+                    plot_one(axs[0,i], x_test[i],'test','input')
+                    plot_one(axs[1,i], predictions[i],'test','prediction')  
+                    plt.tight_layout()
+                    plt.show()
+
         item = self[id]
         plot_task(item)
         
@@ -292,6 +302,7 @@ class GPTDataset(Dataset):
             y = self.pad(y, self.target_length, 'right', self.pad_token)
         
         # context: concat all
+        # remove last token from y
         x = np.concatenate([xy_train, x_test, self.promt_token, y[:-1]], axis=None)
         
         # padding
@@ -307,41 +318,41 @@ class GPTDataset(Dataset):
         "Get raw example, then flat it and add special symbols."
         x, y, x_test, y_test = self.dataset[id]
         
-        # this ugly code add position tokens
+        # this ugly code adds position tokens
         # you can see result below
         # TODO move positinal tokens to ARCDataset
-        xy_train_pos = []
-        xy_train_pos_ab = []
-        for i in range(len(x)):
-            x_ = ((x[i].shape[0])*(x[i].shape[1]+1))+1
-            y_ = ((y[i].shape[0])*(y[i].shape[1]+1))+1
-            xy_train_pos.extend(np.concatenate((np.arange(1,x_+1), np.arange(1,y_+1))))
+        # xy_train_pos = []
+        # xy_train_pos_ab = []
+        # for i in range(len(x)):
+        #     x_ = ((x[i].shape[0])*(x[i].shape[1]+1))+1
+        #     y_ = ((y[i].shape[0])*(y[i].shape[1]+1))+1
+        #     xy_train_pos.extend(np.concatenate((np.arange(1,x_+1), np.arange(1,y_+1))))
 
-            xy_train_pos_ab.extend([1]*x_)
-            xy_train_pos_ab.extend([2]*y_)
+        #     xy_train_pos_ab.extend([1]*x_)
+        #     xy_train_pos_ab.extend([2]*y_)
 
-        x_ = ((x_test[0].shape[0])*(x_test[0].shape[1]+1))+1
-        y_ = ((y_test[0].shape[0])*(y_test[0].shape[1]+1))+1
-        y_ = np.arange(1,y_+1)
+        # x_ = ((x_test[0].shape[0])*(x_test[0].shape[1]+1))+1
+        # y_ = ((y_test[0].shape[0])*(y_test[0].shape[1]+1))+1
+        # y_ = np.arange(1,y_+1)
 
-        # pad y to max flattened 2D field
-        if(len(y_) < self.target_length and self.padding):
-            y_ = self.pad(y_, self.target_length, 'right', 0)
-        xy_test_pos = np.concatenate((np.arange(1,x_+1), y_[:-1]))
-        xy_test_pos_ab = []
-        xy_test_pos_ab.extend([1]*x_)
-        xy_test_pos_ab.extend([2]*(len(y_)-1))
+        # # pad y to max flattened 2D field
+        # if(len(y_) < self.target_length and self.padding):
+        #     y_ = self.pad(y_, self.target_length, 'right', 0)
+        # xy_test_pos = np.concatenate((np.arange(1,x_+1), y_[:-1]))
+        # xy_test_pos_ab = []
+        # xy_test_pos_ab.extend([1]*x_)
+        # xy_test_pos_ab.extend([2]*(len(y_)-1))
 
-        xy_train_pos.extend(xy_test_pos)
+        # xy_train_pos.extend(xy_test_pos)
 
-        # padding
-        if(len(xy_train_pos) < self.n_context and self.padding):
-            xy_train_pos = self.pad(xy_train_pos, self.n_context, 'left', 0)
+        # # padding
+        # if(len(xy_train_pos) < self.n_context and self.padding):
+        #     xy_train_pos = self.pad(xy_train_pos, self.n_context, 'left', 0)
 
-        xy_train_pos_ab.extend(xy_test_pos_ab)
-        # padding
-        if(len(xy_train_pos_ab) < self.n_context and self.padding):
-            xy_train_pos_ab = self.pad(xy_train_pos_ab, self.n_context, 'left', 0)
+        # xy_train_pos_ab.extend(xy_test_pos_ab)
+        # # padding
+        # if(len(xy_train_pos_ab) < self.n_context and self.padding):
+        #     xy_train_pos_ab = self.pad(xy_train_pos_ab, self.n_context, 'left', 0)
 
         x, y = self.flat_all_sample(x, y, x_test, y_test)
 
@@ -352,7 +363,7 @@ class GPTDataset(Dataset):
         # pos tokens:       [0,     0,      0,      0,      0,  1 ,2 ,3,    4,    1, 2, 3,      4,           0,      0]
         # pos_ab tokens:    [0,     0,      0,      0,      0,  1 ,1 ,1,    1,    2, 2, 2,      2,           0,      0]
 
-        x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
+        # x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
         return x, y
 
     @staticmethod
@@ -436,13 +447,13 @@ class MaxNDataset(AbstractDataset):
         "Find tasks with length <= maxn. Create train, test, val datasets."
 
         # find tasks with length <= maxn
-        ds = LightARCDataset()
+        ds = ARCDataset()
         gpt_ds = GPTDataset(ds, self.config)
         lxs = []
 
         for id in range(len(ds)):
             x_gpt, _ =  gpt_ds[id]
-            lxs.append(len(x_gpt) / 3)
+            lxs.append(len(x_gpt) / 1)
             
         lxs = pd.Series(lxs)
         self.logger.info('Median length : {}'.format(lxs.median()))
@@ -460,7 +471,7 @@ class MaxNDataset(AbstractDataset):
         # make datasets
         tasks = [train, test, val]
         for tasks, transform, file in zip(tasks, self.transforms, self.files):
-            arc = LightARCDataset(tasks=tasks, transforms=transform)
+            arc = ARCDataset(tasks=tasks, transforms=transform)
             gpt = GPTDataset(arc, self.config)
             with open(os.path.join(self.datadir, file), 'wb') as f:
                 pickle.dump(gpt, f)
