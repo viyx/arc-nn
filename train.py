@@ -21,8 +21,8 @@ from mingpt.model import GPT
 
 logger = logging.getLogger(__name__)
 
-def _train_update(suffix, step, loss, tracker, epoch, writer):
-    writer.add_scalar(suffix + '/train', loss, step)
+def _train_update(suffix, name, step, loss, tracker, epoch, writer):
+    writer.add_scalar(suffix + name, loss, step)
 
 
 def get_dataset(fast_run=False):
@@ -104,63 +104,66 @@ def train(rank):
     def train_loop_fn(loader, epoch):
         # tracker = xm.RateTracker()
         model.train()
-        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal() else loader
-        # loss_mean = 0.0
+        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal(True) else loader
+        loss_mean = 0.0
         val_losses = []
-        for step, (data, target) in enumerate(tq):
+        for step, (x, y) in enumerate(tq):
             optimizer.zero_grad()
-            _, loss = model(data, target)
+            _, loss = model(x, y)
             loss = loss.mean()
             loss.backward()
-            # loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), FLAGS.grad_norm_clip)
+            loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
             xm.optimizer_step(optimizer)
             # tracker.add(FLAGS.batch_size)
             if step % FLAGS.log_steps == 0  or step == len(loader) - 1:
-                loss_mr = xm.mesh_reduce('loss', loss.item(), np.mean)
+                loss_mean_mr = xm.mesh_reduce('loss', loss_mean, np.mean)
+                loss_curr_mr = xm.mesh_reduce('loss', loss.item(), np.mean)
                 if(xm.is_master_ordinal(True)):
-                    tq.set_description(f"epoch {epoch}: train loss {loss_mr:.5f}")
-                    xm.add_step_closure(_train_update, args=('train', step, loss_mr, None, epoch, writer))
+                    tq.set_description(f"epoch {epoch}: l1: {loss_mean_mr:.3f}, l2: {loss_curr_mr:.3f}")
+                    xm.add_step_closure(_train_update, args=('train/', 'loss_mean', step, loss_mean_mr, None, epoch, writer))
+                    xm.add_step_closure(_train_update, args=('train/', 'loss_curr' ,step, loss_curr_mr, None, epoch, writer))
             if not step == 0 and step % FLAGS.val_steps == 0 or step == len(tq) - 1:
                 val_device_loader = pl.MpDeviceLoader(val_loader, device)
                 val_loss = val_loop_fn(val_device_loader)
                 val_losses.append(val_loss)
                 model.train()
-        return loss_mr, val_losses
+        return loss_mean, val_losses
 
     def val_loop_fn(loader):
         model.eval()
-        tracker = xm.RateTracker()
-        # loss_mean = 0.0
-        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal() else loader
+        # tracker = xm.RateTracker()
+        loss_mean = 0.0
+        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal(True) else loader
         with torch.no_grad():
             for step, (data, target) in enumerate(tq):
                 _, loss = model(data, target)
                 loss = loss.mean()
-                # loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
-                tracker.add(FLAGS.batch_size)
+                loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
+                # tracker.add(FLAGS.batch_size)
                 if step % FLAGS.log_steps == 0 or step == len(loader) - 1:
-                    loss_mr = xm.mesh_reduce('loss_val', loss.item(), np.mean)
-                    if(xm.is_master_ordinal()):
-                        tq.set_description(f"epoch {epoch}: val loss {loss_mr:.5f}")
-                        xm.add_step_closure(_train_update, args=('val', step, loss_mr, None, epoch, writer))
+                    loss_mr = xm.mesh_reduce('loss_val', loss_mean, np.mean)
+                    if(xm.is_master_ordinal(True)):
+                        tq.set_description(f"epoch {epoch}: val loss {loss_mr:.3f}")
+                        xm.add_step_closure(_train_update, args=('val/', 'loss_mean', step, loss_mr, None, epoch, writer))
         save()
         return loss_mr
 
     def test_loop_fn(loader):
         model.eval()
-        tracker = xm.RateTracker()
-        # loss_mean = 0.0
-        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal() else loader
+        # tracker = xm.RateTracker()
+        loss_mean = 0.0
+        tq = tqdm(loader, total=int(len(loader))) if xm.is_master_ordinal(True) else loader
         with torch.no_grad():
             for step, (data, target) in enumerate(tq):
                 _, loss = model(data, target)
                 loss = loss.mean()
-                # loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
-                tracker.add(FLAGS.batch_size)
-                loss_mr = xm.mesh_reduce('loss_test', loss.item(), np.mean)
-                if(xm.is_master_ordinal()):
+                loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
+                # tracker.add(FLAGS.batch_size)
+                loss_mr = xm.mesh_reduce('loss_test', loss_mean, np.mean)
+                if(xm.is_master_ordinal(True)):
                     tq.set_description(f"epoch {epoch}: test loss {loss_mr:.5f}")
-                    xm.add_step_closure(_train_update, args=('test', epoch, loss_mr, None, epoch, writer))
+                    xm.add_step_closure(_train_update, args=('test/', 'loss_mean', epoch, loss_mr, None, epoch, writer))
         return loss_mr
     
     def save():
@@ -175,10 +178,15 @@ def train(rank):
             MODEL.to(device)
         xm.rendezvous('torch_xla.core.xla_model.save')
 
-    # if(xm.is_master_ordinal()):
-        # writer.add_hparams(FLAGS.__dict__, {'test':123})
     train_device_loader = pl.MpDeviceLoader(train_loader, device)
     if(FLAGS.debug):
+        train_loader = torch.utils.data.DataLoader(
+                            train,
+                            batch_size=FLAGS.batch_size,
+                            # sampler=train_sampler,
+                            num_workers=FLAGS.n_workers,
+                            drop_last=False,
+                            shuffle=False)
         train_device_loader = train_loader
     test_device_loader = pl.MpDeviceLoader(test_loader, device)
     for epoch in range(1, FLAGS.n_epochs + 1):
@@ -196,7 +204,7 @@ def train(rank):
             'batch_size': FLAGS.batch_size,
             'n_cores': FLAGS.n_cores,
             }
-        if(xm.is_master_ordinal()):
+        if(xm.is_master_ordinal(True)):
             writer.add_hparams(params, metrics)
         # xm.rendezvous('torch_xla.core.xla_model.save')
         
@@ -219,7 +227,8 @@ def add_train_args(parent_parser):
     parser.add_argument("--fast_run", action='store_true', default=False) # use fast dataset with no transformations
     parser.add_argument("--log_console", action='store_true', default=False) # enable logging
     parser.add_argument("--scale_lr", action='store_true', default=True) # mult lr by num_cores as sm.optimizer sums batches grads(see https://github.com/pytorch/xla/issues/1781#issuecomment-601849130)
-    parser.add_argument("--debug", action="store_true", default=False) # set device to cpu
+    parser.add_argument("--debug", action="store_true", default=False) # work with power on TPU, set device to cpu
+    parser.add_argument("--grad_norm_clip", type=float, default=1.0)
     return parser
 
 
@@ -253,7 +262,7 @@ def map_fn(rank, args):
     # sys.exit(21)
 
 if __name__ == '__main__':
-    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.19.221.90.146:8470"
+    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.59.124.162:8470"
     os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
     os.environ['XLA_USE_BF16'] = "1"
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores)

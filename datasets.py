@@ -312,6 +312,8 @@ class GPTDataset(Dataset):
         # we dont make shift like x = data[:-1], y = data[1:] to decrease data flow
         # we will cut predictions to target_length in model in order to calculate criterion
         # len(x) = n_context, len(y) = target_length
+        assert np.allclose(x[-self.target_length+1:], y[:-1])
+        assert (x[-self.target_length+1:] != self.pad_token).sum() > 2
         return x, y
     
     def __getitem__(self, id):

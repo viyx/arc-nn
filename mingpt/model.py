@@ -34,9 +34,15 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("mask_tril", torch.tril(torch.ones(config.n_context, config.n_context))
                                      .view(1, 1, config.n_context, config.n_context))
         # tcontext mask to ensure we dont learn predict context itself
-        # self.register_buffer("mask_rect", torch.cat([torch.zeros((config.n_context - config.target_length, config.n_context)),
-                                    # torch.ones((config.target_length, config.n_context))])
+        # self.register_buffer("mask_rect", torch.cat(
+                                    # [torch.zeros((config.n_context - config.target_length, config.n_context)),
+                                    #  torch.ones((config.target_length, config.n_context))])
                                     #  .view(1, 1, config.n_context, config.n_context))
+        diff = config.n_context - config.target_length
+        tl = config.target_length
+        rectangle = F.pad(torch.ones((diff,diff)),(0,tl,0,tl),'constant',0)
+                                     
+        self.register_buffer("mask_rect", rectangle.view(1,1,config.n_context, config.n_context))
         self.n_head = config.n_head
 
     def forward(self, x, layer_past=None):
@@ -70,7 +76,7 @@ class CausalSelfAttention(nn.Module):
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask_tril[:,:,:T,:T] == 0, float('-inf'))
+        att = att.masked_fill((self.mask_tril[:,:,:T,:T] == 0) & (self.mask_rect == 0), float('-inf'))
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -175,8 +181,10 @@ class GPT(nn.Module):
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
-            logits_eval = logits[:,-self.target_size:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
-            loss = F.cross_entropy(logits_eval, targets, ignore_index=self.pad_token)
+            # logits_eval = logits[:,-self.target_size:,:].transpose(-1,-2) # take only last logits as we need to predict them from context
+            logits_eval = logits[:,-self.target_size:,:]
+            # loss = F.cross_entropy(logits_eval, targets, ignore_index=self.pad_token)
+            loss = F.cross_entropy(logits_eval.view(-1, logits_eval.size(-1)), targets.view(-1), ignore_index=self.pad_token)
 
         return logits, loss
 
