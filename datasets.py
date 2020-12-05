@@ -238,6 +238,8 @@ class GPTDataset(Dataset):
         self.padding = config.padding # expand x to n_context
         # max flatten y size with special tokens(30 end_lines,1 end_episode)
         self.target_length = config.target_length
+        self.add_positions = config.add_positions
+
         
         # make special tokens 
         self.end_line_token =  config.end_line_token           # array of shape (10, 3) has 10 end_lines
@@ -312,69 +314,74 @@ class GPTDataset(Dataset):
         # we dont make shift like x = data[:-1], y = data[1:] to decrease data flow
         # we will cut predictions to target_length in model in order to calculate criterion
         # len(x) = n_context, len(y) = target_length
-        assert np.allclose(x[-self.target_length+1:], y[:-1])
-        assert (x[-self.target_length+1:] != self.pad_token).sum() > 2
+
+        # tests
+        # assert np.allclose(x[-self.target_length+1:], y[:-1])
+        # assert (x[-self.target_length+1:] != self.pad_token).sum() > 2
         return x, y
     
     def __getitem__(self, id):
         "Get raw example, then flat it and add special symbols."
         x, y, x_test, y_test = self.dataset[id]
         
+
         # this ugly code adds position tokens
         # you can see result below
         # TODO move positinal tokens to ARCDataset
-        # xy_train_pos = []
-        # xy_train_pos_ab = []
-        # for i in range(len(x)):
-        #     x_ = ((x[i].shape[0])*(x[i].shape[1]+1))+1
-        #     y_ = ((y[i].shape[0])*(y[i].shape[1]+1))+1
-        #     xy_train_pos.extend(np.concatenate((np.arange(1,x_+1), np.arange(1,y_+1))))
+        if(self.add_positions):
+            xy_train_pos = []
+            xy_train_pos_ab = []
+            for i in range(len(x)):
+                x_ = ((x[i].shape[0])*(x[i].shape[1]+1))+1
+                y_ = ((y[i].shape[0])*(y[i].shape[1]+1))+1
+                xy_train_pos.extend(np.concatenate((np.arange(1,x_+1), np.arange(1,y_+1))))
 
-        #     xy_train_pos_ab.extend([1]*x_)
-        #     xy_train_pos_ab.extend([2]*y_)
+                xy_train_pos_ab.extend([1]*x_)
+                xy_train_pos_ab.extend([2]*y_)
 
-        # x_ = ((x_test[0].shape[0])*(x_test[0].shape[1]+1))+1
-        # y_ = ((y_test[0].shape[0])*(y_test[0].shape[1]+1))+1
-        # y_ = np.arange(1,y_+1)
+            x_ = ((x_test[0].shape[0])*(x_test[0].shape[1]+1))+1
+            y_ = ((y_test[0].shape[0])*(y_test[0].shape[1]+1))+1
+            y_ = np.arange(1,y_+1)
 
-        # # pad y to max flattened 2D field
-        # if(len(y_) < self.target_length and self.padding):
-        #     y_ = self.pad(y_, self.target_length, 'right', 0)
-        # xy_test_pos = np.concatenate((np.arange(1,x_+1), y_[:-1]))
-        # xy_test_pos_ab = []
-        # xy_test_pos_ab.extend([1]*x_)
-        # xy_test_pos_ab.extend([2]*(len(y_)-1))
+            # pad y to max flattened 2D field
+            if(len(y_) < self.target_length and self.padding):
+                y_ = self.pad(y_, self.target_length, 'right', 0)
+            xy_test_pos = np.concatenate((np.arange(1,x_+1), y_[:-1]))
+            xy_test_pos_ab = []
+            xy_test_pos_ab.extend([1]*x_)
+            xy_test_pos_ab.extend([2]*(len(y_)-1))
 
-        # xy_train_pos.extend(xy_test_pos)
+            xy_train_pos.extend(xy_test_pos)
 
-        # # padding
-        # if(len(xy_train_pos) < self.n_context and self.padding):
-        #     xy_train_pos = self.pad(xy_train_pos, self.n_context, 'left', 0)
+            # padding
+            if(len(xy_train_pos) < self.n_context and self.padding):
+                xy_train_pos = self.pad(xy_train_pos, self.n_context, 'left', 0)
 
-        # xy_train_pos_ab.extend(xy_test_pos_ab)
-        # # padding
-        # if(len(xy_train_pos_ab) < self.n_context and self.padding):
-        #     xy_train_pos_ab = self.pad(xy_train_pos_ab, self.n_context, 'left', 0)
+            xy_train_pos_ab.extend(xy_test_pos_ab)
+            # padding
+            if(len(xy_train_pos_ab) < self.n_context and self.padding):
+                xy_train_pos_ab = self.pad(xy_train_pos_ab, self.n_context, 'left', 0)
 
-        x, y = self.flat_all_sample(x, y, x_test, y_test)
 
-        # add positional tokens separately for each episode
-        # example
-        #                   |---------------------------x-----------------------|--------------------y----------------|
-        # main tokens:      [<pad>, <pad>, <pad>, <pad>, <pad>, 5 ,7 ,6, <promt>, 8, 2, 3, <end_episode>, <pad>, <pad>]
-        # pos tokens:       [0,     0,      0,      0,      0,  1 ,2 ,3,    4,    1, 2, 3,      4,           0,      0]
-        # pos_ab tokens:    [0,     0,      0,      0,      0,  1 ,1 ,1,    1,    2, 2, 2,      2,           0,      0]
+            # add positional tokens separately for each episode (multipling #tokens by 3)
+            # example
+            #                   |---------------------------x-----------------------|--------------------y----------------|
+            # main tokens:      [<pad>, <pad>, <pad>, <pad>, <pad>, 5 ,7 ,6, <promt>, 8, 2, 3, <end_episode>, <pad>, <pad>]
+            # pos tokens:       [0,     0,      0,      0,      0,  1 ,2 ,3,    4,    1, 2, 3,      4,           0,      0]
+            # pos_ab tokens:    [0,     0,      0,      0,      0,  1 ,1 ,1,    1,    2, 2, 2,      2,           0,      0]
+            x, y = self.flat_all_sample(x, y, x_test, y_test)
 
-        # x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
+            x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
         return x, y
 
     @staticmethod
     def add_data_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--add_positions", default=False, action='store_true')
         parser.add_argument("--target_length", type=int, default=30*30+30+1)
         parser.add_argument("--n_colors", type=int, default=10)
         parser.add_argument("--n_context", type=int, default=2048)
-        parser.add_argument("--padding", default=True, action='store_true')
+        parser.add_argument("--padding", action='store_true')
         parser.add_argument("--end_line_token", type=int, default=10)
         parser.add_argument("--promt_token", type=int, default=11)
         parser.add_argument("--end_episode_token", type=int, default=12)
@@ -443,6 +450,7 @@ class MaxNDataset(AbstractDataset):
         self.n_colors = config.n_colors
         self.padding = config.padding
         self.transforms = transforms
+        # self.add_positions = config.add_positions
         super().__init__(config=config)
 
     def create_new_dataset(self):
@@ -455,10 +463,13 @@ class MaxNDataset(AbstractDataset):
 
         for id in range(len(ds)):
             x_gpt, _ =  gpt_ds[id]
-            lxs.append(len(x_gpt) / 1)
+            lxs.append(len(x_gpt))
             
         lxs = pd.Series(lxs)
         self.logger.info('Median length : {}'.format(lxs.median()))
+
+        # multiply by 3 if GPTDataset adds position tokens
+        # maxn = self.maxn if not self.add_positions else self.maxn * 3
         indices = lxs[lxs <= self.maxn].index.tolist()
         maxn_tasks = np.array(ds.tasks)[indices].tolist()
 
