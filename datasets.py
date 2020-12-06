@@ -369,9 +369,11 @@ class GPTDataset(Dataset):
             # main tokens:      [<pad>, <pad>, <pad>, <pad>, <pad>, 5 ,7 ,6, <promt>, 8, 2, 3, <end_episode>, <pad>, <pad>]
             # pos tokens:       [0,     0,      0,      0,      0,  1 ,2 ,3,    4,    1, 2, 3,      4,           0,      0]
             # pos_ab tokens:    [0,     0,      0,      0,      0,  1 ,1 ,1,    1,    2, 2, 2,      2,           0,      0]
-            x, y = self.flat_all_sample(x, y, x_test, y_test)
-
+            
+        x, y = self.flat_all_sample(x, y, x_test, y_test)
+        if(self.add_positions):
             x = np.concatenate((x, xy_train_pos, xy_train_pos_ab), axis=None)
+
         return x, y
 
     @staticmethod

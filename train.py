@@ -262,7 +262,7 @@ def map_fn(rank, args):
     # sys.exit(21)
 
 if __name__ == '__main__':
-    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.238.124.130:8470"
+    os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.40.251.178:8470"
     os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
     os.environ['XLA_USE_BF16'] = "1"
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores)
