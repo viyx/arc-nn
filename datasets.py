@@ -467,7 +467,7 @@ class MaxNDataset(AbstractDataset):
             x_gpt, _ =  gpt_ds[id]
             lxs.append(len(x_gpt))
             
-        lxs = pd.Series(lxs)
+        lxs = pd.Series(lxs) # TODO replace pandas with np
         self.logger.info('Median length : {}'.format(lxs.median()))
 
         # multiply by 3 if GPTDataset adds position tokens
