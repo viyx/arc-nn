@@ -38,6 +38,7 @@ class ColorPermutation(Transform):
         super().__init__(limit)
         self.max_colors = max_colors
 
+    @lru_cache()
     def P(self, n, r):
         "Return permutation counts. Order matters."
         return factorial(n) // factorial(n - r)
@@ -52,9 +53,26 @@ class ColorPermutation(Transform):
 
     # may be removed when net is large and time to perform the operation ~ batch forwarding time
     # cache ~ 1GB per dataloader process
-    @lru_cache()
-    def _get_permutations(self, n, r):
-        return list(permutations(range(n), r))
+    # @lru_cache()
+    def _get_permutations(self, n, r, idx):
+        "Fast and low-memory analog of `list(permutations(range(n),r))[idx]`"
+        
+        
+        result = set()
+        all = set(range(n))
+
+        for d in range(r):
+            c = self.P(n-d,r-d)
+            q1 = c//(n-d)
+            q2, r2 = divmod(idx, q1)
+            to_add = list(all-result)[q2]
+            result |= {to_add}
+            idx = r2
+        result = tuple(result)
+
+        # ground_truth = list(permutations(range(n),r))[idx]
+        # assert result == ground_truth
+        return result
 
     def transform_data(self, idx, data):
         """Get permutated data.
@@ -65,8 +83,8 @@ class ColorPermutation(Transform):
         u_colors = set.union(*[set(np.concatenate(i, axis=None)) for i in data])
         u_colors = np.array(list(u_colors))
 
-        # tuple like (1,5,6)
-        p = self._get_permutations(self.max_colors, len(u_colors))[idx]
+        # p is tuple like (1,5,6)
+        p = self._get_permutations(self.max_colors, len(u_colors), idx)
 
         # replace unique colors with permuted ones
         m = np.zeros(self.max_colors, dtype=np.long)
@@ -151,7 +169,7 @@ class ARCDataset:
             assert id < len(self)
 
             # find original task for `id` and make all transforms
-            original_task_idx = np.searchsorted(self.intervals, id) - 1
+            original_task_idx = max(0,np.searchsorted(self.intervals,id)-1)
             original_taskname = self.tasks[original_task_idx] # str
             original_data = self[original_taskname]
             

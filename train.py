@@ -1,10 +1,5 @@
 import sys
 import os
-
-os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
-os.environ['XLA_USE_BF16'] = "1"
-os.environ['LD_LIBRARY_PATH'] = '~/anaconda3/envs/torch-xla-nightly/lib'
-
 from tqdm import tqdm
 from datetime import datetime
 from argparse import ArgumentParser
@@ -268,7 +263,10 @@ def map_fn(rank, args):
 
 if __name__ == '__main__':
     # os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.40.251.178:8470"
-    # os.environ['PYTHONWARNINGS'] = "ignore:semaphore_tracker:UserWarning"
-    # os.environ['XLA_USE_BF16'] = "1"
-    # os.environ['LD_LIBRARY_PATH'] = os.environ['LD_LIBRARY_PATH'] + ':~/anaconda3/envs/torch-xla-nightly/lib'
+    os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
+    os.environ['XLA_USE_BF16'] = '1'
+    if(FLAGS.debug):
+        os.environ['XRT_DEVICE_MAP'] = 'CPU:0;/job:localservice/replica:0/task:0/device:XLA_CPU:0'
+        os.environ['XRT_WORKERS'] = 'localservice:0;grpc://localhost:40934'
+
     xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores)
