@@ -98,7 +98,7 @@ def train(rank):
         FLAGS.log_dir = writer.log_dir
 
     if(FLAGS.scale_lr):
-        FLAGS.lr *= xm.xrt_world_size()
+        FLAGS.lr *=size()
     optimizer = model.configure_optimizers(FLAGS)
 
     def train_loop_fn(loader, epoch):
@@ -226,7 +226,7 @@ def add_train_args(parent_parser):
     parser.add_argument("--log_dir", type=str) # tensorboard and checkpoint dir
     parser.add_argument("--fast_run", action='store_true', default=False) # use fast dataset with no transformations
     parser.add_argument("--log_console", action='store_true', default=False) # enable logging
-    parser.add_argument("--scale_lr", action='store_true', default=True) # mult lr by num_cores as sm.optimizer sums batches grads(see https://github.com/pytorch/xla/issues/1781#issuecomment-601849130)
+    parser.add_argument("--scale_lr", action='store_true') # mult lr by num_cores as sm.optimizer sums batches grads(see https://github.com/pytorch/xla/issues/1781#issuecomment-601849130)
     parser.add_argument("--debug", action="store_true", default=False) # work with power on TPU, set device to cpu
     parser.add_argument("--grad_norm_clip", type=float, default=1.0)
     return parser
