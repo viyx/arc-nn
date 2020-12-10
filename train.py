@@ -25,7 +25,7 @@ def _train_update(suffix, name, step, loss, tracker, epoch, writer):
     writer.add_scalar(suffix + name, loss, step)
 
 
-def get_dataset(fast_run=False):
+def get_dataset(fast_run):
         if(fast_run):
             train_trans = None
             test_trans = None
@@ -89,6 +89,7 @@ def train(rank):
 
     if(FLAGS.debug):
         device = torch.device('cpu')
+        # device = xm.xla_device(devkind='CPU')
     else:
         device = xm.xla_device()
     model = MODEL.to(device)
@@ -98,7 +99,7 @@ def train(rank):
         FLAGS.log_dir = writer.log_dir
 
     if(FLAGS.scale_lr):
-        FLAGS.lr *=size()
+        FLAGS.lr *=xm.xrt_world_size()
     optimizer = model.configure_optimizers(FLAGS)
 
     def train_loop_fn(loader, epoch):
@@ -183,10 +184,9 @@ def train(rank):
         train_loader = torch.utils.data.DataLoader(
                             train,
                             batch_size=FLAGS.batch_size,
-                            # sampler=train_sampler,
                             num_workers=FLAGS.n_workers,
                             drop_last=False,
-                            shuffle=False)
+                            shuffle=True)
         train_device_loader = train_loader
     test_device_loader = pl.MpDeviceLoader(test_loader, device)
     for epoch in range(1, FLAGS.n_epochs + 1):
@@ -224,10 +224,10 @@ def add_train_args(parent_parser):
     parser.add_argument("--log_steps", type=int, default=10) # log
     parser.add_argument("--val_steps", type=int, default=15000) # make validation every
     parser.add_argument("--log_dir", type=str) # tensorboard and checkpoint dir
-    parser.add_argument("--fast_run", action='store_true', default=False) # use fast dataset with no transformations
-    parser.add_argument("--log_console", action='store_true', default=False) # enable logging
+    parser.add_argument("--fast_run", action='store_true') # use fast dataset with no transformations
+    parser.add_argument("--log_console", action='store_true') # enable logging
     parser.add_argument("--scale_lr", action='store_true') # mult lr by num_cores as sm.optimizer sums batches grads(see https://github.com/pytorch/xla/issues/1781#issuecomment-601849130)
-    parser.add_argument("--debug", action="store_true", default=False) # work with power on TPU, set device to cpu
+    parser.add_argument("--debug", action="store_true") # work with power on TPU, set device to cpu
     parser.add_argument("--grad_norm_clip", type=float, default=1.0)
     return parser
 
