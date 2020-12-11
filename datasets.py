@@ -491,6 +491,7 @@ class MaxNDataset(AbstractDataset):
         # multiply by 3 if GPTDataset adds position tokens
         # maxn = self.maxn if not self.add_positions else self.maxn * 3
         indices = lxs[lxs <= self.maxn].index.tolist()
+        assert len(indices) > 0, f'No tasks with length {self.maxn}. Check --add_positions and --padding arguments.'
         maxn_tasks = np.array(ds.tasks)[indices].tolist()
 
         # split tasks

@@ -106,6 +106,7 @@ class GPT(nn.Module):
         self.n_context = config.n_context
         self.target_size = config.target_length # TODO rename
         self.add_positions = config.add_positions
+        self.maxn = config.maxn
 
         # input embedding stem
         self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.pad_token)
@@ -128,11 +129,12 @@ class GPT(nn.Module):
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
-        assert t <= self.n_context, "Cannot forward, model block size is exhausted."
+        assert t <= self.maxn, "Cannot forward, input size is exhausted."
 
         # forward the GPT model
         if(self.add_positions):
             idx = idx.view(b, 3, -1)
+            assert idx.size()[1] <= self.n_context, "Cannot forward, model block size is exhausted."
             token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
             pos_embeddings = self.pos_emb(idx[:,1,:])
             pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
