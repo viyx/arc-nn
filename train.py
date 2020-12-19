@@ -81,7 +81,7 @@ def train(rank):
     def val_loop_fn(loader):
         model.eval()
         loss_mean = 0.0
-        tq = tqdm(loader, leave=False) if xm.is_master_ordinal(True) else loader
+        tq = tqdm(loader, leave=False, unit_scale=FLAGS.n_cores) if xm.is_master_ordinal(True) else loader
         with torch.no_grad():
             for step, (data, target) in enumerate(tq):
                 _, loss = model(data, target)
@@ -117,7 +117,7 @@ def train(rank):
         }
     
         if(xm.is_master_ordinal()):
-            name = os.path.join(wandb.run.dir, f'model_epoch{epoch}_step{step}.h5')
+            name = os.path.join(wandb.run.dir, f'model_epoch{epoch}_step{step}.pt')
             torch.save(curr_state, name)
             wandb.save(name, base_path=wandb.run.dir)
         xm.rendezvous('save')
@@ -223,11 +223,7 @@ parser = add_train_args(ArgumentParser())
 parser = MaxNDataset.add_data_specific_args(parser)
 parser = GPT.add_model_specific_args(parser)
 FLAGS, unknown = parser.parse_known_args()
-# FLAGS.betas = eval(FLAGS.betas)
-# FLAGS.split = eval(FLAGS.split)
-# chkp = torch.load('model.pt', map_location='cpu')
 m = GPT(FLAGS)
-# m.load_state_dict(chkp['model_state_dict'])
 MODEL = xmp.MpModelWrapper(m)
 SERIAL_EXEC = xmp.MpSerialExecutor()
 SEED = 333
