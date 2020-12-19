@@ -9,8 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 # RUN update-alternatives --install /usr/lib/python3.5 python /usr/lib/python3 1
 # Install pip requirements
-# ADD requirements.txt .
-# RUN python -m pip install -r requirements.txt
+ADD requirements.txt .
+RUN python -m pip install -r requirements.txt
 
 WORKDIR /app
 ADD . /app
