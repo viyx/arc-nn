@@ -8,3 +8,5 @@ data/
 runs/
 .devcontainer/
 wandb/
+outputs/
+multirun/

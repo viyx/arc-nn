@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import logging
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
@@ -96,7 +97,13 @@ class ColorPermutation(Transform):
 
 
 class ARCDataset:
-    def __init__(self, tasks=None, transforms=None, data_folder='./data'):
+    def __init__(self, tasks=None, transforms=None, data_folder='data'):
+        logger = logging.getLogger(__name__)
+        # when start with `hydra` cwd is different
+        cwd = os.path.dirname(os.path.realpath(__file__))
+        print(f'cwd = {cwd}')
+        data_folder = os.path.join(cwd, data_folder)
+        print(f'data_folder = {data_folder}')
         if(tasks is None): # load all tasks
             train_tasks = glob.glob(data_folder + '/training/*.json')
             eval_tasks = glob.glob(data_folder + '/evaluation/*.json')
@@ -397,7 +404,7 @@ class GPTDataset(Dataset):
     @staticmethod
     def add_data_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--add_positions", default=False, action='store_true')
+        parser.add_argument("--add_positions", action='store_true')
         parser.add_argument("--target_length", type=int, default=30*30+30+1)
         parser.add_argument("--n_colors", type=int, default=10)
         parser.add_argument("--n_context", type=int, default=2048)

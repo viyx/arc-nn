@@ -20,13 +20,7 @@ import torch_xla.distributed.parallel_loader as pl
 import torch_xla.test.test_utils as test_utils
 from mingpt.model import GPT
 import wandb
-
-
-# def _train_update(suffix, name, step, loss, tracker, epoch, writer):
-    # raise('error')
-    # pass
-    # writer.add_scalar(suffix + name, loss, step)
-    # wandb.log({'name':suffix+name,'loss':loss,'step':step})
+import hydra
 
 
 def get_dataset(fast_run):
@@ -123,8 +117,10 @@ def train(rank):
         xm.rendezvous('save')
 
     set_seed(SEED)
-    global SERIAL_EXEC, MODEL
-    train, test, val = SERIAL_EXEC.run(lambda: get_dataset(FLAGS.fast_run))
+    # global SERIAL_EXEC, MODEL
+    global MODEL
+    # train, test, val = SERIAL_EXEC.run(lambda: get_dataset(FLAGS.fast_run))
+    train, test, val = get_dataset(FLAGS.fast_run)
 
     train_sampler = torch.utils.data.distributed.DistributedSampler(
         train,
@@ -205,7 +201,7 @@ def add_train_args(parent_parser):
     parser = ArgumentParser(parents=[parent_parser], add_help=False)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--n_epochs", type=int, default=5)
-    parser.add_argument("--n_cores", type=int, default=8)
+    parser.add_argument("--n_cores", type=int, default=1)
     parser.add_argument("--n_workers", type=int, default=1)
     parser.add_argument("--log_steps", type=int, default=10) # log
     parser.add_argument("--val_steps", type=int, default=15000) # make validation every
@@ -224,8 +220,9 @@ parser = MaxNDataset.add_data_specific_args(parser)
 parser = GPT.add_model_specific_args(parser)
 FLAGS, unknown = parser.parse_known_args()
 m = GPT(FLAGS)
-MODEL = xmp.MpModelWrapper(m)
-SERIAL_EXEC = xmp.MpSerialExecutor()
+MODEL = m
+# MODEL = xmp.MpModelWrapper(m)
+# SERIAL_EXEC = xmp.MpSerialExecutor()
 SEED = 333
 logger = logging.getLogger(__name__)
 
@@ -233,8 +230,9 @@ if(FLAGS.log_console):
     logging.basicConfig(
             format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
             datefmt="%m/%d/%Y %H:%M:%S",
-            level=logging.INFO,
+            level=logging.DEBUG,
     )
+
 
 def map_fn(rank, args):
     global FLAGS
@@ -245,13 +243,36 @@ def map_fn(rank, args):
     xm.rendezvous('exit')
     # sys.exit(21)
 
-if __name__ == '__main__':
+from omegaconf import DictConfig
+@hydra.main(config_name="config")
+def main(cfg: DictConfig):
+    # print(os.environ['XRT_TPU_CONFIG'])
     os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
     os.environ['XLA_USE_BF16'] = '1'
+    # print(os.environ['XRT_TPU_CONFIG'])
     if(FLAGS.debug):
+        print('debug')
         os.environ['XRT_DEVICE_MAP'] = 'CPU:0;/job:localservice/replica:0/task:0/device:XLA_CPU:0'
         os.environ['XRT_WORKERS'] = 'localservice:0;grpc://localhost:40934'
     else:
-        os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.78.79.90:8470"
+        # if()
+        print(os.environ['XRT_TPU_CONFIG'])
+        # os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.78.79.90:8470"
     wandb.login()
-    xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores)
+    FLAGS.__dict__.update(cfg)
+    xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores, start_method='spawn')
+
+
+if __name__ == '__main__':
+    # FLAGS.debug = True
+    # os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
+    # os.environ['XLA_USE_BF16'] = '1'
+    # # FLAGS.debug = True
+    # if(FLAGS.debug):
+    #     os.environ['XRT_DEVICE_MAP'] = 'CPU:0;/job:localservice/replica:0/task:0/device:XLA_CPU:0'
+    #     os.environ['XRT_WORKERS'] = 'localservice:0;grpc://localhost:40934'
+    # else:
+    #     os.environ['XRT_TPU_CONFIG'] = "tpu_worker;0;10.78.79.90:8470"
+    # xmp.spawn(map_fn, args=(FLAGS,), nprocs=FLAGS.n_cores)
+    main()
+
