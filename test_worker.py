@@ -24,9 +24,10 @@ from mingpt.model import GPT
 import wandb
 
 
+os.environ['XRT_TPU_CONFIG'] = 'tpu_worker;0;10.42.117.58:8470'
 
 with Connection():
     qs = ['default']
 
-    w = Worker(qs)
-    w.work()
+    w = Worker(qs, )
+    w.work(max_jobs=1, burst=True, logging_level='DEBUG')

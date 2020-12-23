@@ -1,0 +1,13 @@
+# @package _global_
+n_embd : 256
+n_head : 8
+n_layer : 12
+embd_pdrop : 0.0
+attn_pdrop : 0.1
+resid_pdrop : 0.1
+vocab_size : 14
+lr : 1e-4
+weight_decay: 0.1
+momentum : 0.5
+betas : (0.9, 0.95)
+scale_lr : true

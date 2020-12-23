@@ -1,0 +1,11 @@
+# @package _global_
+
+# dataset:
+add_positions : false
+padding : false
+maxn : 1024
+# model:
+n_layer : 2
+n_embd : 16
+n_head : 2
+lr : 1e-3

@@ -1,0 +1,7 @@
+n_epochs : 5
+batch_size : 16
+debug : false
+n_cores : 8
+n_workers : 1
+val_step : 10000
+save : true

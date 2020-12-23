@@ -1,12 +1,11 @@
 import math
 import logging
-from argparse import ArgumentParser
+# from argparse import ArgumentParser
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
 logger = logging.getLogger(__name__)
-
 
 class CausalSelfAttention(nn.Module):
     """
@@ -17,7 +16,11 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.config = config
+
+        self.n_context = config.n_context
+        self.target_length = config.target_length
+        self.n_head = config.n_head
+
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads
         self.key = nn.Linear(config.n_embd, config.n_embd)
@@ -30,18 +33,17 @@ class CausalSelfAttention(nn.Module):
         self.proj = nn.Linear(config.n_embd, config.n_embd)
 
         # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer("mask_tril", torch.tril(torch.ones(config.n_context, config.n_context))
-                                     .view(1, 1, config.n_context, config.n_context))
+        self.register_buffer("mask_tril", torch.tril(torch.ones(self.n_context, self.n_context))
+                                     .view(1, 1, self.n_context, self.n_context))
 
         # mask to always see all context
-        # diff = config.n_context - config.target_length
+        # diff = self.n_context - config.target_length
         # tl = config.target_length
         # rectangle = F.pad(torch.ones((diff,diff)),(0,tl,0,tl),'constant',0)
-        # self.register_buffer("mask_rect", rectangle.view(1,1,config.n_context, config.n_context))
-        self.register_buffer("mask_zeros", torch.zeros(config.n_context, config.n_context))
-        self.register_buffer("mask_ones", torch.ones(config.n_context, config.n_context))
+        # self.register_buffer("mask_rect", rectangle.view(1,1,self.n_context, self.n_context))
+        self.register_buffer("mask_zeros", torch.zeros(self.n_context, self.n_context))
+        self.register_buffer("mask_ones", torch.ones(self.n_context, self.n_context))
 
-        self.n_head = config.n_head
 
     def forward(self, x, targets=None):
         B, T, C = x.size()
@@ -49,7 +51,7 @@ class CausalSelfAttention(nn.Module):
         if(targets is not None):
             t = targets.size(-1)
         else:
-            t = self.config.target_length
+            t = self.target_length
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -94,6 +96,7 @@ class Block(nn.Module):
         # return x
         return (x, targets)
 
+
 class GPT(nn.Module):
     """The full GPT language model, with a context size of n_context """
 
@@ -101,19 +104,14 @@ class GPT(nn.Module):
         super().__init__()
 
         self.pad_token = config.pad_token
-        self.promt_token = config.promt_token
-        self.end_episode_token = config.end_episode_token
-        self.n_context = config.n_context
-        self.target_size = config.target_length # TODO rename
         self.add_positions = config.add_positions
         self.maxn = config.maxn
 
-        # input embedding stem
-        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.pad_token)
         # reserve `0` for padding
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.pad_token)
 
         if(self.add_positions):
-            self.pos_emb = nn.Embedding(self.n_context + 1, config.n_embd, padding_idx=0)
+            self.pos_emb = nn.Embedding(config.n_context + 1, config.n_embd, padding_idx=0)
             self.pos_emb_ab = nn.Embedding(2 + 1, config.n_embd, padding_idx=0)
         self.drop = nn.Dropout(config.embd_pdrop)
 
@@ -125,7 +123,7 @@ class GPT(nn.Module):
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-        logger.info("number of parameters: %e", sum(p.numel() for p in self.parameters()))
+        logger.info("Number of parameters: %s", sum(p.numel() for p in self.parameters()))
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
@@ -134,7 +132,6 @@ class GPT(nn.Module):
         # forward the GPT model
         if(self.add_positions):
             idx = idx.view(b, 3, -1)
-            assert idx.size()[1] <= self.n_context, "Cannot forward, model block size is exhausted."
             token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
             pos_embeddings = self.pos_emb(idx[:,1,:])
             pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
@@ -144,7 +141,6 @@ class GPT(nn.Module):
 
         x = self.drop(x)
         x, _ = self.blocks((x, targets))
-        # x = self.blocks(x)
         x = self.ln_f(x)
         logits = self.head(x)
 
@@ -153,7 +149,7 @@ class GPT(nn.Module):
         if targets is not None:
             # take only last logits as we need to predict them from context
             logits_eval = logits[:,-targets.size(-1):,:]
-            # loss = F.cross_entropy(logits_eval, targets, ignore_index=self.pad_token)
+            # loss = F.cross_entropy(logits_eval, targets, ignore_index=config.dataset.pad_token)
             loss = F.cross_entropy(logits_eval.view(-1, logits_eval.size(-1)), targets.view(-1), ignore_index=self.pad_token)
         return logits, loss
 
@@ -216,18 +212,18 @@ class GPT(nn.Module):
         return optimizer
 
 
-    @staticmethod
-    def add_model_specific_args(parent_parser):
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--n_embd", type=int, default=8)
-        parser.add_argument("--n_head", type=int, default=2)
-        parser.add_argument("--n_layer", type=int, default=2)
-        parser.add_argument("--embd_pdrop", type=float, default=0.0)
-        parser.add_argument("--attn_pdrop", type=float, default=0.1)
-        parser.add_argument("--resid_pdrop", type=float, default=0.1)
-        parser.add_argument("--vocab_size", type=int, default=14)
-        parser.add_argument("--lr", type=float, default=3e-4)
-        parser.add_argument("--weight_decay", type=float, default=0.1)
-        parser.add_argument("--momentum", type=float, default=0.5)
-        parser.add_argument("--betas", type=str, default='(0.9, 0.95)')
-        return parser
+    # @staticmethod
+    # def add_model_specific_args(parent_parser):
+    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
+    #     parser.add_argument("--n_embd", type=int, default=8)
+    #     parser.add_argument("--n_head", type=int, default=2)
+    #     parser.add_argument("--n_layer", type=int, default=2)
+    #     parser.add_argument("--embd_pdrop", type=float, default=0.0)
+    #     parser.add_argument("--attn_pdrop", type=float, default=0.1)
+    #     parser.add_argument("--resid_pdrop", type=float, default=0.1)
+    #     parser.add_argument("--vocab_size", type=int, default=14)
+    #     parser.add_argument("--lr", type=float, default=3e-4)
+    #     parser.add_argument("--weight_decay", type=float, default=0.1)
+    #     parser.add_argument("--momentum", type=float, default=0.5)
+    #     parser.add_argument("--betas", type=str, default='(0.9, 0.95)')
+    #     return parser

@@ -26,7 +26,7 @@ class Transform:
         raise(NotImplementedError())
 
     def transform_data(self, idx, data):
-        """Return one transformation from all possible for data.
+        """Return transformation by idx from all possible.
         `idx` should be less `min(self.limit, self.count(data))`.
         """
         raise(NotImplementedError())
@@ -52,12 +52,11 @@ class ColorPermutation(Transform):
         c = self.P(self.max_colors, len(u_colors))
         return min(self.limit, c)
 
-    # may be removed when net is large and time to perform the operation ~ batch forwarding time
+    # may be removed when net is large and time to perform the operation ~ batch forwarding time as
     # cache ~ 1GB per dataloader process
     # @lru_cache()
     def _get_permutations(self, n, r, idx):
         "Fast and low-memory analog of `list(permutations(range(n),r))[idx]`"
-        
         
         result = set()
         all = set(range(n))
@@ -98,12 +97,9 @@ class ColorPermutation(Transform):
 
 class ARCDataset:
     def __init__(self, tasks=None, transforms=None, data_folder='data'):
-        logger = logging.getLogger(__name__)
         # when start with `hydra` cwd is different
         cwd = os.path.dirname(os.path.realpath(__file__))
-        print(f'cwd = {cwd}')
         data_folder = os.path.join(cwd, data_folder)
-        print(f'data_folder = {data_folder}')
         if(tasks is None): # load all tasks
             train_tasks = glob.glob(data_folder + '/training/*.json')
             eval_tasks = glob.glob(data_folder + '/evaluation/*.json')
@@ -401,19 +397,19 @@ class GPTDataset(Dataset):
 
         return x, y
 
-    @staticmethod
-    def add_data_specific_args(parent_parser):
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--add_positions", action='store_true')
-        parser.add_argument("--target_length", type=int, default=30*30+30+1)
-        parser.add_argument("--n_colors", type=int, default=10)
-        parser.add_argument("--n_context", type=int, default=2048)
-        parser.add_argument("--padding", action='store_true')
-        parser.add_argument("--end_line_token", type=int, default=10)
-        parser.add_argument("--promt_token", type=int, default=11)
-        parser.add_argument("--end_episode_token", type=int, default=12)
-        parser.add_argument("--pad_token", type=int, default=13)
-        return parser
+    # @staticmethod
+    # def add_data_specific_args(parent_parser):
+    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
+    #     parser.add_argument("--add_positions", action='store_true')
+    #     parser.add_argument("--target_length", type=int, default=30*30+30+1)
+    #     parser.add_argument("--n_colors", type=int, default=10)
+    #     parser.add_argument("--n_context", type=int, default=2048)
+    #     parser.add_argument("--padding", action='store_true')
+    #     parser.add_argument("--end_line_token", type=int, default=10)
+    #     parser.add_argument("--promt_token", type=int, default=11)
+    #     parser.add_argument("--end_episode_token", type=int, default=12)
+    #     parser.add_argument("--pad_token", type=int, default=13)
+        # return parser
 
 
 ###
@@ -454,12 +450,12 @@ class AbstractDataset():
     def create_new_dataset(self):
         raise(NotImplementedError())
 
-    @classmethod
-    def add_data_specific_args(cls, parent_parser):
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--split", type=str, default='(0.8,0.1,0.1)')
-        parser.add_argument("--download", action="store_true")
-        return parser
+    # @classmethod
+    # def add_data_specific_args(cls, parent_parser):
+    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
+    #     parser.add_argument("--split", type=str, default='(0.8,0.1,0.1)')
+    #     parser.add_argument("--download", action="store_true")
+    #     return parser
 
 
 class MaxNDataset(AbstractDataset):
@@ -521,14 +517,14 @@ class MaxNDataset(AbstractDataset):
         self.logger.info('Lengths after transforms. train : {}, test : {}, val : {}'.
             format(*map(len, self.datasets)))
 
-    @classmethod
-    def add_data_specific_args(cls, parent_parser):
-        parent_parser = super().add_data_specific_args(parent_parser)
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument("--maxn", type=int, default=2048)
-        parser.add_argument("--datadir", type=str, default='data/datasets/maxn/')
-        parser = GPTDataset.add_data_specific_args(parser)
-        return parser
+    # @classmethod
+    # def add_data_specific_args(cls, parent_parser):
+    #     parent_parser = super().add_data_specific_args(parent_parser)
+    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
+    #     parser.add_argument("--maxn", type=int, default=2048)
+    #     parser.add_argument("--datadir", type=str, default='data/datasets/maxn/')
+    #     parser = GPTDataset.add_data_specific_args(parser)
+        # return parser
 
 ###
 #Generation

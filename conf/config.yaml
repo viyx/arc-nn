@@ -1,0 +1,17 @@
+defaults:
+  - dataset: maxndataset
+  - model: gpt
+  - train: cpu
+
+fast_run : false
+seed : 333
+n_epochs : 1
+batch_size : 1
+debug : True
+n_cores : 1
+n_workers : 1
+save : false
+scale_lr : false
+grad_norm_clip : 0.1
+log_step : 50
+val_step : 100
