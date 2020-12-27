@@ -2,16 +2,59 @@ defaults:
   - dataset: maxndataset
   - model: gpt
   - train: cpu
+  # - hydra/launcher: rq
 
-fast_run : false
+split : (0.899,0.1,0.001)
+
+hydra:
+#   launcher:
+#     # enqueue:
+#       # job_id: ${wandb_id:}
+#     stop_after_enqueue: false
+  job:
+    name: ${wandb_id:}
+  # log:
+
+  # hydra_logging:
+    # version: 1
+    # formatters:
+    #   simple:
+    #     format: '[%(asctime)s][HYDRA] %(message)s'
+    # handlers:
+    #   console:
+    #     class: logging.StreamHandler
+    #     formatter: simple
+    #     stream: ext://sys.stdout
+    # root:
+    #   level: INFO
+    #   handlers:
+    #   - console
+    # loggers:
+    #   logging_example:
+    #     level: DEBUG
+
+
+fast_run : False
 seed : 333
 n_epochs : 1
 batch_size : 1
 debug : True
 n_cores : 1
 n_workers : 1
-save : false
-scale_lr : false
+# save : False
+scale_lr : False
 grad_norm_clip : 0.1
 log_step : 50
-val_step : 100
+
+# validation
+val_step : 0
+init_epoch: 1
+best: None
+early_stop_patience: 3
+patience: 0
+
+# save
+# values for restoring training after crash
+# and saving the best checkpoint
+preempt: 'preempt.pt'
+best: 'best.pt'
