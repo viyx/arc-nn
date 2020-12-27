@@ -46,37 +46,47 @@ def get_dataset(fast_run):
 
 
 def train(rank):
-    def train_loop_fn(loader, val_loader, epoch):
+    def wandb_global_step(epoch, steps_in_epoch, i):
+        return (epoch-1) * steps_in_epoch + i*FLAGS.n_cores
+
+    def train_loop_fn(loader, val_loader, test_loader, epoch):
         MODEL.train()
         tq = tqdm(loader, unit_scale=FLAGS.n_cores) if xm.is_master_ordinal(True) else loader
         loss_mean = 0.0
         # val_losses = []
-        for step, (x, y) in enumerate(tq):
+        for step, (x, y) in enumerate(tq, 1):
             optimizer.zero_grad()
             _, loss = MODEL(x, y)
             loss = loss.mean()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(MODEL.parameters(), FLAGS.grad_norm_clip)
-            loss_mean = (loss_mean * (step) + loss.item())/(step + 1)
+            loss_mean = (loss_mean * (step-1) + loss.item())/(step)
             xm.optimizer_step(optimizer)
 
             # log
-            if (step*FLAGS.n_cores) % FLAGS.log_step < FLAGS.n_cores or step == len(loader) - 1:
+            if (step*FLAGS.n_cores) % FLAGS.log_step < FLAGS.n_cores or step == len(loader):
                 loss_mean_mr = xm.mesh_reduce('loss', loss_mean, np.mean)
                 if(xm.is_master_ordinal(True)):
                     tq.set_description(f"epoch {epoch}: loss: {loss_mean_mr:.3f}")
-                    wandb.log({'loss_train':loss_mean_mr}, step=step*FLAGS.n_cores)
+                    
+                    # don't trace step to cloud now
+                    if step == len(loader):
+                        wandb.log({'loss_train':loss_mean_mr}, commit=False)
+                    else: wandb.log({'loss_train':loss_mean_mr}, step=wandb_global_step(epoch, len(tq), step))
 
         # validate on the end of epoch or per interval
         # if not step == 0 and (step*FLAGS.n_cores) % FLAGS.val_step < FLAGS.n_cores or step == len(tq) - 1:
         # if(FLAGS.save):
             # save(epoch, step*FLAGS.n_cores)
         val_loss = val_loop_fn(val_loader)
-        # val_losses.append(val_loss)
+        test_loss = test_loop_fn(test_loader)
         if(xm.is_master_ordinal()):
-            wandb.log({'loss_val':val_loss}, step=step*FLAGS.n_cores)
-        MODEL.train()
-        return loss_mean, val_loss
+            wandb.log({'loss_val':val_loss, 'loss_test':test_loss, }, step=wandb_global_step(epoch, len(tq), step))
+        # val_losses.append(val_loss)
+        # if(xm.is_master_ordinal()):
+            # wandb.log({'loss_val':val_loss}, step=step*FLAGS.n_cores)
+        # MODEL.train()
+        return loss_mean, val_loss, test_loss
 
     def val_loop_fn(loader):
         MODEL.eval()
@@ -180,8 +190,8 @@ def train(rank):
     # resume
     if xm.is_master_ordinal(True):
         wandb.init(
-            id=HYDRA_FLAGS.job.id,
-            group=HYDRA_FLAGS.job.name,
+            id=HYDRA_FLAGS.job.name,
+            # group=HYDRA_FLAGS.job.name,
             project='gpt',
             config=FLAGS._content,
             resume='allow',
@@ -194,19 +204,19 @@ def train(rank):
             # check file to restore
             can_restore = False
             for f in run.files():
-                if FLAGS.preempt in f.name:
+                if FLAGS.preempt_file in f.name:
                     can_restore = True
             
             if(can_restore):            
-                wandb.restore(FLAGS.preempt, root='./')
-                chpt = torch.load(FLAGS.preempt)
+                wandb.restore(FLAGS.preempt_file, root='./')
+                chpt = torch.load(FLAGS.preempt_file)
                 MODEL.load_state_dict(chpt['model_state_dict'])
                 optimizer.load_state_dict(chpt['optimizer_state_dict'])
                 # FLAGS.update(chpt['flags'])
                 OmegaConf.update(FLAGS, 'patience', chpt['flags']['patience'])
                 OmegaConf.update(FLAGS, 'init_epoch', chpt['flags']['init_epoch'])
-                OmegaConf.update(FLAGS, 'best', chpt['flags']['best'])
-                LOGGER.info(f'Load weights from checkpoint {FLAGS.preempt}')
+                OmegaConf.update(FLAGS, 'best_loss', chpt['flags']['best_loss'])
+                LOGGER.info(f'Load weights from checkpoint {FLAGS.preempt_file}')
     
     if(FLAGS.n_cores > 1):
         train_loader = pl.MpDeviceLoader(train_loader, device)
@@ -216,30 +226,33 @@ def train(rank):
     xm.rendezvous('wait all')
     for epoch in range(FLAGS.init_epoch, FLAGS.n_epochs + 1):
         if xm.is_master_ordinal():
-            LOGGER.info('Start epoch {} with batch_size {} and best {}'.
-                format(epoch, FLAGS.batch_size, FLAGS.best))
+            LOGGER.info('Start epoch={} with batch_size={} and best_loss={}'.
+                format(epoch, FLAGS.batch_size, FLAGS.best_loss))
 
-        train_loss, val_loss = train_loop_fn(train_loader, val_loader, epoch)
+        train_loss, val_loss, test_loss = \
+            train_loop_fn(train_loader, val_loader, test_loader, epoch)
+        # test_loss = test_loop_fn(test_loader)
+
         FLAGS.init_epoch += 1
-        if(FLAGS.best): 
-            if FLAGS.best <= val_loss:
-                FLAGS.patience += 1
-            else: 
-                FLAGS.best = val_loss
-                FLAGS.patience = 0
-                wandb.run.summary["best_loss"] = val_loss
-                wandb.run.summary["best_epoch"] = epoch
-                # save best checkpoint independently of preemptible checkpoint
-                save('best.pt')
-
-        else: FLAGS.best = val_loss
-        save('preempt.pt')
-
-        test_loss = test_loop_fn(test_loader)
+        # if(FLAGS.best_loss): 
+        if FLAGS.best_loss <= val_loss:
+            FLAGS.patience += 1
+        else: 
+            FLAGS.best_loss = val_loss
+            FLAGS.patience = 0
+            wandb.run.summary["best_loss"] = val_loss
+            wandb.run.summary["best_epoch"] = epoch
+            # save best checkpoint independently of preemptible checkpoint
+            save(FLAGS.best_file)
+# 
+        # else: FLAGS.best_loss = val_loss
+        save(FLAGS.preempt_file)
 
         if xm.is_master_ordinal():
+            # wandb.log({'loss_val':val_loss, 'loss_test':test_loss}, step=epoch)
+            # wandb.log({'loss_test':test_loss}, step=epoch)
             LOGGER.info('Finish epoch {}. train: {:.2f}, val: {:.2f}, test: {:.2f}, best: {:.2F}, patience: {}/{}'.
-                format(epoch, train_loss, val_loss, test_loss, FLAGS.best, FLAGS.patience, FLAGS.early_stop_patience))
+                format(epoch, train_loss, val_loss, test_loss, FLAGS.best_loss, FLAGS.patience, FLAGS.early_stop_patience))
         
         if(FLAGS.patience == FLAGS.early_stop_patience):
             LOGGER.info('Stop training')
@@ -255,6 +268,8 @@ def prepare_flags_for_training():
     # exlude validation per interval
     if FLAGS.val_step == 0:
         FLAGS.val_step = np.inf
+    if FLAGS.best_loss == 0:
+        FLAGS.best_loss = np.inf
 
     # keep only dict from DictConfig
     # FLAGS = FLAGS._content

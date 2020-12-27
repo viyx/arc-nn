@@ -49,12 +49,12 @@ log_step : 50
 # validation
 val_step : 0
 init_epoch: 1
-best: None
+best_loss: 0
 early_stop_patience: 3
 patience: 0
 
 # save
 # values for restoring training after crash
 # and saving the best checkpoint
-preempt: 'preempt.pt'
-best: 'best.pt'
+preempt_file: 'preempt.pt'
+best_file: 'best.pt'
