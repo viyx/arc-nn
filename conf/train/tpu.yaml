@@ -3,5 +3,14 @@ batch_size : 16
 debug : false
 n_cores : 8
 n_workers : 1
-val_step : 10000
-save : true
+val_step : 0
+save : false
+add_positions : true 
+padding : true
+maxn : 2048*3
+n_context: 2048
+# model:
+n_layer : 8
+n_embd : 128
+n_head : 8
+lr : 1e-3

@@ -2,9 +2,7 @@ defaults:
   - dataset: maxndataset
   - model: gpt
   - train: cpu
-  # - hydra/launcher: rq
-
-split : (0.899,0.1,0.001)
+  - hydra/launcher: rq
 
 hydra:
 #   launcher:
@@ -41,7 +39,7 @@ batch_size : 1
 debug : True
 n_cores : 1
 n_workers : 1
-# save : False
+save : False
 scale_lr : False
 grad_norm_clip : 0.1
 log_step : 50
