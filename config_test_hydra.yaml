@@ -1,0 +1,2 @@
+hydra/launcher: default
+n_cores: 8

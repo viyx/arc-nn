@@ -46,6 +46,7 @@ def get_dataset(fast_run):
 
 
 def train(rank):
+    # LOGGER.info(f'Unit {rank} is starting.')
     def wandb_global_step(epoch, steps_in_epoch, i):
         return (epoch-1) * steps_in_epoch + i*FLAGS.n_cores
 
