@@ -184,7 +184,8 @@ def train(rank):
     if xm.is_master_ordinal(True):
         wandb.init(
             id=HYDRA_FLAGS.job.id,
-            group=HYDRA_FLAGS.job.name,
+            # group=HYDRA_FLAGS.job.name,
+            group=wandb.util.generate_id(),
             project='gpt',
             config=FLAGS._content,
             resume='allow',
@@ -236,8 +237,9 @@ def train(rank):
         else: 
             FLAGS.best_loss = val_loss
             FLAGS.patience = 0
-            wandb.run.summary["best_loss"] = val_loss
-            wandb.run.summary["best_epoch"] = epoch
+            if(xm.is_master_ordinal()):
+                wandb.run.summary["best_loss"] = val_loss
+                wandb.run.summary["best_epoch"] = epoch
             if(FLAGS.save):
                 # save best checkpoint independently of preemptible checkpoint
                 save(FLAGS.best_file)

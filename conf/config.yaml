@@ -4,13 +4,13 @@ defaults:
   - train: cpu
   - hydra/launcher: rq
 
-hydra:
+# hydra:
 #   launcher:
 #     # enqueue:
 #       # job_id: ${wandb_id:}
 #     stop_after_enqueue: false
-  job:
-    name: ${wandb_id:}
+  # job:
+    # name: ${wandb_id:}
   # log:
 
   # hydra_logging:

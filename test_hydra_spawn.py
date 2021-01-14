@@ -1,12 +1,12 @@
 import os
 from omegaconf import OmegaConf
-import torch_xla.distributed.xla_multiprocessing as xmp
 import hydra
 from wandb.util import generate_id
 
 
 @hydra.main(config_path='conf', config_name="config")
 def main(cfg):
+    import torch_xla.distributed.xla_multiprocessing as xmp
     from test_hydra import map_fn
     assert os.environ['WANDB_API_KEY'], 'Specify wandb api key'
 
@@ -26,5 +26,5 @@ def main(cfg):
 
 
 if __name__ == '__main__':
-    OmegaConf.register_resolver("wandb_id", lambda: generate_id())
+    # OmegaConf.register_resolver("wandb_id", lambda: generate_id())
     main()

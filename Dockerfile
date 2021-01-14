@@ -1,6 +1,6 @@
 # For more information, please refer to https://aka.ms/vscode-docker-python
 # FROM python:3.8-slim-buster
-FROM gcr.io/tpu-pytorch/xla:nightly_3.6
+FROM gcr.io/tpu-pytorch/xla:nightly_3.7
 
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -9,8 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 # RUN update-alternatives --install /usr/lib/python3.5 python /usr/lib/python3 1
 # Install pip requirements
-ADD requirements.txt .
-RUN python -m pip install -r requirements.txt
+# ADD requirements.txt .
+# RUN python -m pip install -r requirements.txt
 
 WORKDIR /app
 ADD . /app
