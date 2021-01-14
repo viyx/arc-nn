@@ -1,6 +1,6 @@
-# @package _global
+# @package _global_
 
-_n_epochs : 5
+n_epochs : 5
 batch_size : 16
 debug : false
 n_cores : 8
@@ -9,7 +9,7 @@ val_step : 0
 save : false
 add_positions : true 
 padding : true
-maxn : 2048*3
+maxn : 6144 #2048*3
 n_context: 2048
 # model:
 n_layer : 8

@@ -182,6 +182,7 @@ def train(rank):
 
     # resume
     if xm.is_master_ordinal(True):
+        wandb.login()
         wandb.init(
             id=HYDRA_FLAGS.job.id,
             # group=HYDRA_FLAGS.job.name,
@@ -275,7 +276,7 @@ def map_fn(rank, *args):
     FLAGS, HYDRA_FLAGS = args
     prepare_flags_for_training()
     MODEL = GPT(FLAGS)
-    wandb.login()
+    # wandb.login()
     train(rank)
     xm.rendezvous('exit')
     # sys.exit(21)
