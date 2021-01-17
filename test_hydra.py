@@ -175,6 +175,7 @@ def train(rank):
     else:
         device = xm.xla_device()
     MODEL.to(device)
+    # LOGGER.info(f'Start training on {device}')
     optimizer = MODEL.configure_optimizers(FLAGS)
 
     if(FLAGS.scale_lr):
@@ -215,10 +216,15 @@ def train(rank):
                 OmegaConf.update(FLAGS, 'init_epoch', chpt['flags']['init_epoch'], merge=False)
                 OmegaConf.update(FLAGS, 'best_loss', chpt['flags']['best_loss'], merge=False)
                 LOGGER.info(f'Load weights from checkpoint {FLAGS.preempt_file}')
+            else:
+                LOGGER.info('Can\'t restore files, start from epoch 1.')
+                # disable annoing warning -> wandb: WARNING Step must only increase in log calls.
+                logger = logging.getLogger("wandb")
+                logger.setLevel(logging.ERROR)
     
     if(FLAGS.n_cores > 1):
         train_loader = pl.MpDeviceLoader(train_loader, device)
-        val_loader = pl.MpDeviceLoader(train_loader, device)
+        val_loader = pl.MpDeviceLoader(val_loader, device)
         test_loader = pl.MpDeviceLoader(test_loader, device)
 
     xm.rendezvous('wait all')
@@ -236,7 +242,7 @@ def train(rank):
         if FLAGS.best_loss <= val_loss:
             FLAGS.patience += 1
         else: 
-            FLAGS.best_loss = val_loss
+            FLAGS.best_loss = float(val_loss)
             FLAGS.patience = 0
             if(xm.is_master_ordinal()):
                 wandb.run.summary["best_loss"] = val_loss
@@ -254,6 +260,7 @@ def train(rank):
         if(FLAGS.patience == FLAGS.early_stop_patience):
             LOGGER.info('Stop training')
             break
+        xm.rendezvous('wait all')
                 
     if(xm.is_master_ordinal(local=True)):
         wandb.finish()
@@ -268,39 +275,11 @@ def prepare_flags_for_training():
     if FLAGS.best_loss == 0:
         FLAGS.best_loss = np.inf
 
-   # keep only dict from DictConfig
-   # FLAGS = FLAGS._content
 
 def map_fn(rank, *args):
     global FLAGS, HYDRA_FLAGS, MODEL
     FLAGS, HYDRA_FLAGS = args
     prepare_flags_for_training()
     MODEL = GPT(FLAGS)
-    # wandb.login()
     train(rank)
     xm.rendezvous('exit')
-    # sys.exit(21)
-
-
-# from torch_xla.distributed.xla_multiprocessing import spawn
-# from multiprocessing import Pool
-# import hydra
-
-# def map_fn(rank):
-#     print(rank)
-#     return rank
-
-
-# @hydra.main(config_name="config_test_hydra")
-# def main(cfg):
-#     with Pool(cfg.n_cores) as p:
-#         result = p.map(map_fn, range(cfg.n_cores))
-    
-#     print('result:', result)
-
-#     # spawn(map_fn, nprocs=cfg.n_cores, start_method='spawn')
-
-
-# if __name__ == '__main__':
-#     main()
-
