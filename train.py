@@ -1,29 +1,22 @@
-import sys
 import os
 from tqdm import tqdm
 from datetime import datetime
-# from argparse import ArgumentParser
 import download
 import logging
 import numpy as np
 from datasets import MaxNDataset, GPTDataset, ColorPermutation
-# import pickle
 from utils import set_seed
 import torch
 import torch.optim as optim
 from torch.utils.data import Subset
-# from torch.utils.tensorboard import SummaryWriter
-# if('XRT_TOU_CONFIG' in os.environ):
 import torch_xla as xla
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
-# import torch_xla.test.test_utils as test_utils
 from mingpt.model import GPT
 import wandb
 from wandb.util import generate_id
 import hydra
-# from hydra.core.utils import setup_globals
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -46,7 +39,6 @@ def get_dataset(fast_run):
 
 
 def train(rank):
-    # LOGGER.info(f'Unit {rank} is starting.')
     def wandb_global_step(epoch, steps_in_epoch, i):
         return (epoch-1) * steps_in_epoch + i*FLAGS.n_cores
 
@@ -176,6 +168,7 @@ def train(rank):
     else:
         device = xm.xla_device()
     MODEL.to(device)
+    # LOGGER.info(f'Start training on {device}')
     optimizer = MODEL.configure_optimizers(FLAGS)
 
     if(FLAGS.scale_lr):
@@ -183,9 +176,11 @@ def train(rank):
 
     # resume
     if xm.is_master_ordinal(True):
+        wandb.login()
         wandb.init(
             id=HYDRA_FLAGS.job.id,
-            group=HYDRA_FLAGS.job.name,
+            # group=HYDRA_FLAGS.job.name,
+            group=wandb.util.generate_id(),
             project='gpt',
             config=FLAGS._content,
             resume='allow',
@@ -214,10 +209,15 @@ def train(rank):
                 OmegaConf.update(FLAGS, 'init_epoch', chpt['flags']['init_epoch'], merge=False)
                 OmegaConf.update(FLAGS, 'best_loss', chpt['flags']['best_loss'], merge=False)
                 LOGGER.info(f'Load weights from checkpoint {FLAGS.preempt_file}')
+            else:
+                LOGGER.info('Can\'t restore files, start from epoch 1.')
+                # disable annoing warning -> wandb: WARNING Step must only increase in log calls.
+                logger = logging.getLogger("wandb")
+                logger.setLevel(logging.ERROR)
     
     if(FLAGS.n_cores > 1):
         train_loader = pl.MpDeviceLoader(train_loader, device)
-        val_loader = pl.MpDeviceLoader(train_loader, device)
+        val_loader = pl.MpDeviceLoader(val_loader, device)
         test_loader = pl.MpDeviceLoader(test_loader, device)
 
     xm.rendezvous('wait all')
@@ -235,10 +235,11 @@ def train(rank):
         if FLAGS.best_loss <= val_loss:
             FLAGS.patience += 1
         else: 
-            FLAGS.best_loss = val_loss
+            FLAGS.best_loss = float(val_loss)
             FLAGS.patience = 0
-            wandb.run.summary["best_loss"] = val_loss
-            wandb.run.summary["best_epoch"] = epoch
+            if(xm.is_master_ordinal()):
+                wandb.run.summary["best_loss"] = val_loss
+                wandb.run.summary["best_epoch"] = epoch
             if(FLAGS.save):
                 # save best checkpoint independently of preemptible checkpoint
                 save(FLAGS.best_file)
@@ -252,6 +253,7 @@ def train(rank):
         if(FLAGS.patience == FLAGS.early_stop_patience):
             LOGGER.info('Stop training')
             break
+        xm.rendezvous('wait all')
                 
     if(xm.is_master_ordinal(local=True)):
         wandb.finish()
@@ -266,40 +268,11 @@ def prepare_flags_for_training():
     if FLAGS.best_loss == 0:
         FLAGS.best_loss = np.inf
 
-    # keep only dict from DictConfig
-    # FLAGS = FLAGS._content
-
 
 def map_fn(rank, *args):
     global FLAGS, HYDRA_FLAGS, MODEL
     FLAGS, HYDRA_FLAGS = args
     prepare_flags_for_training()
     MODEL = GPT(FLAGS)
-    wandb.login()
     train(rank)
     xm.rendezvous('exit')
-    # sys.exit(21)
-
-@hydra.main(config_path='conf', config_name="config")
-def main(cfg: DictConfig):
-    assert os.environ['WANDB_API_KEY'], 'Specify wandb api key'
-
-    os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
-    os.environ['XLA_USE_BF16'] = '1'
-    if(cfg.debug):
-        os.environ['XRT_DEVICE_MAP'] = 'CPU:0;/job:localservice/replica:0/task:0/device:XLA_CPU:0'
-        os.environ['XRT_WORKERS'] = 'localservice:0;grpc://localhost:40934'
-    else:
-        assert os.environ['XRT_TPU_CONFIG'], 'Specify xla device.'
-    
-    # allow to change
-    # OmegaConf.set_struct(cfg, False)
-    full_conf = hydra.core.hydra_config.HydraConfig.get()
-
-    xmp.spawn(map_fn, args=(cfg, full_conf,), nprocs=cfg.n_cores, start_method='spawn')
-
-
-if __name__ == '__main__':
-    OmegaConf.register_resolver("wandb_id", lambda: generate_id())
-    main()
-

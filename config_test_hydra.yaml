@@ -1,2 +1,0 @@
-hydra/launcher: rq 
-n_cores: 8
