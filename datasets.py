@@ -33,7 +33,8 @@ class Transform:
     
 
 class ColorPermutation(Transform):
-    # TODO make shuffling for permutation when limit exists
+    "Replace colors in task."
+    # TODO make shuffling for permutation when limit exists because
     # TODO now we take first #limit permutations, it shifts color distribution to first colors (0,1,2,3..)
     def __init__(self, limit=1000, max_colors=10):
         super().__init__(limit)
@@ -52,7 +53,7 @@ class ColorPermutation(Transform):
         c = self.P(self.max_colors, len(u_colors))
         return min(self.limit, c)
 
-    # may be removed when net is large and time to perform the operation ~ batch forwarding time as
+    # may be removed when net is large and time to perform the operation ~ batch forwarding time
     # cache ~ 1GB per dataloader process
     # @lru_cache()
     def _get_permutations(self, n, r, idx):
@@ -96,6 +97,7 @@ class ColorPermutation(Transform):
 
 
 class ARCDataset:
+    "Base class with access to raw dataset data. It also stores transofmations."
     def __init__(self, tasks=None, transforms=None, data_folder='data'):
         # when start with `hydra` cwd is different
         cwd = os.path.dirname(os.path.realpath(__file__))
@@ -111,6 +113,8 @@ class ARCDataset:
         # populate intervals for futher navigation througout transforms
         # each transform has `count()` method which returns #n new tasks
         # we record #n transformations per task in `intervals` which contain intervals
+        # `intervals` will contain intervals for all dataset.
+        # for example, (break[1] - break[0]) shows transformation count for first task
         if transforms:
             intervals = [0]
             for task in self.tasks:
@@ -119,8 +123,6 @@ class ARCDataset:
                     per_task_cnt += tr.count(self[task])
                 intervals.append(per_task_cnt)
             
-            # `intervals` will contain intervals for all dataset.
-            # for example, (break[1] - break[0]) shows transformation count for first task
             self.intervals = np.cumsum(intervals)
             assert len(self.intervals) == len(self.tasks) + 1
 
@@ -148,7 +150,8 @@ class ARCDataset:
         if(type(id) is int and self.transforms is None):
             id = self.tasks[id]
 
-        if(type(id) is not int): # id is str, untransformed task
+        # id is str, untransformed task
+        if(type(id) is not int):
             with open(id) as f:
                 sample = json.load(f)
             # map json to lists of 2-D arrays
@@ -243,13 +246,11 @@ class ARCDataset:
         
 
 class GPTDataset(Dataset):
-    """Flat 2D samples and add specials tokens.
-    
-    General scheme:
+    """Flat 2D samples and add specials tokens in this way:
     
     flatten(x) + `promt` + flatten(y) + `end_episode`
     
-    Here `flatten` is:
+    Here `flatten(arg)` is:
     flat 2D array and add `end_line` in the end of every line.
     """
     def __init__(self, dataset, config):
@@ -290,7 +291,6 @@ class GPTDataset(Dataset):
         y = self.flat_2D_field(y)
         return np.concatenate([x, self.promt_token, y, self.end_episode_token], axis=None)
 
-    # TODO replace `pad` with `np.pad`
     # TODO not pass if no padding needed
     def pad(self, seq, to, direct, pad_token):
         "Pad sequence to left or right."
@@ -397,27 +397,12 @@ class GPTDataset(Dataset):
 
         return x, y
 
-    # @staticmethod
-    # def add_data_specific_args(parent_parser):
-    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
-    #     parser.add_argument("--add_positions", action='store_true')
-    #     parser.add_argument("--target_length", type=int, default=30*30+30+1)
-    #     parser.add_argument("--n_colors", type=int, default=10)
-    #     parser.add_argument("--n_context", type=int, default=2048)
-    #     parser.add_argument("--padding", action='store_true')
-    #     parser.add_argument("--end_line_token", type=int, default=10)
-    #     parser.add_argument("--promt_token", type=int, default=11)
-    #     parser.add_argument("--end_episode_token", type=int, default=12)
-    #     parser.add_argument("--pad_token", type=int, default=13)
-        # return parser
-
 
 ###
 ### Here you can find different high-level configuraitons of datasets
 ### 
 
 
-from download import try_load_and_save_from_bucket_if_not_exist
 import pickle
 import logging
 from pathlib import Path
@@ -439,23 +424,14 @@ class AbstractDataset():
         self.datasets = []
 
         if config.download:
-            # TODO extract check files logic from next-line func
-            try_load_and_save_from_bucket_if_not_exist(self.datadir, files)
+            #TODO add downloading and saving to cloud
             for f in files:
                 with open(self.datadir + f, 'rb') as file:
                     self.datasets.append(pickle.load(file))
-        # TODO save after create
         else: self.create_new_dataset()
 
     def create_new_dataset(self):
         raise(NotImplementedError())
-
-    # @classmethod
-    # def add_data_specific_args(cls, parent_parser):
-    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
-    #     parser.add_argument("--split", type=str, default='(0.8,0.1,0.1)')
-    #     parser.add_argument("--download", action="store_true")
-    #     return parser
 
 
 class MaxNDataset(AbstractDataset):
@@ -517,14 +493,6 @@ class MaxNDataset(AbstractDataset):
         self.logger.info('Lengths after transforms. train : {}, test : {}, val : {}'.
             format(*map(len, self.datasets)))
 
-    # @classmethod
-    # def add_data_specific_args(cls, parent_parser):
-    #     parent_parser = super().add_data_specific_args(parent_parser)
-    #     parser = ArgumentParser(parents=[parent_parser], add_help=False)
-    #     parser.add_argument("--maxn", type=int, default=2048)
-    #     parser.add_argument("--datadir", type=str, default='data/datasets/maxn/')
-    #     parser = GPTDataset.add_data_specific_args(parser)
-        # return parser
 
 ###
 #Generation

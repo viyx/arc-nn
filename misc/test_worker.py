@@ -5,12 +5,11 @@ import os
 from tqdm import tqdm
 from datetime import datetime
 from argparse import ArgumentParser
-import download
 import logging
 import numpy as np
-from datasets import MaxNDataset, GPTDataset, ColorPermutation
+# from datasets import MaxNDataset, GPTDataset, ColorPermutation
 import pickle
-from utils import set_seed
+# from utils import set_seed
 import torch
 import torch.optim as optim
 from torch.utils.data import Subset
@@ -20,7 +19,7 @@ import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
 import torch_xla.test.test_utils as test_utils
-from mingpt.model import GPT
+# from ... import mingpt
 import wandb
 
 
