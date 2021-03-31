@@ -1,7 +1,6 @@
 import os
 from tqdm import tqdm
 from datetime import datetime
-import download
 import logging
 import numpy as np
 from datasets import MaxNDataset, GPTDataset, ColorPermutation

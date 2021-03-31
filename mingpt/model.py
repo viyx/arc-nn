@@ -170,6 +170,7 @@ class GPT(nn.Module):
         We are then returning the PyTorch optimizer object.
         """
 
+        return torch.optim.SGD(self.parameters(), lr=train_config.lr)
         # separate out all parameters to those that will and won't experience regularizing weight decay
         decay = set()
         no_decay = set()

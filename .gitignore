@@ -10,3 +10,5 @@ runs/
 wandb/
 outputs/
 multirun/
+.mypy_cache/
+*pytest_cache/
