@@ -1,15 +1,26 @@
-from torch.utils.data import Dataset
 import numpy as np
+from itertools import chain
 import logging
+from typing import List, Tuple, Optional
 
-from .abc import AbstractDataset
-from .arc import ARCDataset
+from torch.utils.data import Dataset, Subset
+from omegaconf import DictConfig
+
+from .base import AbstractDataset
+from .arc import ARCDataset, UnfoldARCDataset
 from .transforms import Transform
+
+TRAIN_TEST_VAL_TRANSFORMS = \
+        Tuple[Optional[List[Transform]],
+              Optional[List[Transform]],
+              Optional[List[Transform]]]
+
 
 def flat_x(end_line_token, x):
     "Add column of `end_line` tokens and flat 2D array."
     assert x.ndim == 2
-    x_pad = np.pad(x, ((0,0),(0,1)), 'constant', constant_values=end_line_token)
+    x_pad = np.pad(x, ((0, 0), (0, 1)), 'constant',
+                   constant_values=end_line_token)
     x_ravel = x_pad.ravel()
     return x_ravel
 
@@ -24,9 +35,7 @@ def flat_xy(pair, promt_token, end_episode_token, end_line_token):
 
 class GPTDataset(Dataset):
     """Flat 2D samples and add specials tokens in this way:
-    
-    flatten(x) + `promt` + flatten(y) + `end_episode`
-    
+    flatten(x) + `promt` + flatten(y) + `end_episode`.
     Here `flatten(arg)` is:
     flat 2D array and add `end_line` in the end of every line.
     """
@@ -54,7 +63,6 @@ class GPTDataset(Dataset):
         
     def __len__(self):
         return len(self.dataset)
-    
 
     # TODO not pass if no padding needed
     def pad(self, seq, to, direct, pad_token):
@@ -167,18 +175,15 @@ class GPTDataset(Dataset):
 class MaxNDataset(AbstractDataset):
     "Fitler tasks by length of context."
     # TODO api for building datasets
-    def __init__(
-        self,
-        config,
-        transforms=[None, None, None],  # train, test, val transformations
-        ):
+    def __init__(self, config: DictConfig,
+                 transforms: TRAIN_TEST_VAL_TRANSFORMS) -> None:
         self.logger = logging.getLogger('MaxNDataset')
         self.maxn = config.maxn
         self.config = config
         self.target_length = config.target_length
         self.n_colors = config.n_colors
         self.padding = config.padding
-        self.transforms = transforms
+        # self.transforms = transforms
         # self.add_positions = config.add_positions
         super().__init__(config=config)
 
@@ -224,23 +229,124 @@ class MaxNDataset(AbstractDataset):
             format(*map(len, self.datasets)))
 
 
-# class OneTaskOneDataset(AbstractDataset):
-#     def __init__(
-#         self,
-#         config,
-#         transforms:list(Transform)=None
-#         ):
-#         self.logger = logging.getLogger('OneTaskOneDataset')
-#         self.transforms = transforms
-#         super().__init__(config=config)
-    
-#     class MiniDataset(Dataset):
-#         def __init__(self, arc_dataset):
-#             self.arc = arc_dataset
+class OneTaskOneDataset(AbstractDataset):
+    def __init__(self, config: DictConfig,
+                 transforms: TRAIN_TEST_VAL_TRANSFORMS,
+                 same_train_val: bool = True) -> None:
+        self.logger = logging.getLogger('OneTaskOneDataset')
+        self.same_train_val = same_train_val
+        self.task = config.tasks[0]
+        super().__init__(config, transforms)
 
-#         def __getitem__(self, idx):
+    def _split(self, dataset: UnfoldARCDataset) -> Tuple[int, int, int]:
+        tr, test, val = self.split
+        tr = tr + test
+        tr_num = int(tr * len(dataset))
+        val_num = len(dataset) - tr_num
+        return tr_num, 1, val_num
+
+    def _create(self) -> Tuple[Dataset, Dataset, Dataset]:
+        if(self.same_train_val):
+            train_transform = self.transforms[0]
+            uarc = UnfoldARCDataset(task=self.task,
+                                 transforms=train_transform,
+                                 test=False)
+            splits = self._split(uarc)
+            indices = np.arange(len(uarc))
+            np.random.shuffle(indices)
+            train_indicies = indices[:splits[0]]
+            val_indicies = indices[splits[0]:]
+            train_ds: Dataset = Subset(uarc, train_indicies)
+            val_ds = Subset(uarc, val_indicies)
+
+            test_transforms = self.transforms[1]
+            test_ds = UnfoldARCDataset(task=self.task,
+                                 transforms=test_transforms,
+                                 test=True)
+            return train_ds, test_ds, val_ds
+        else:
+            train = UnfoldARCDataset(task=self.task,
+                                   transforms=self.transforms[0])
+            val = UnfoldARCDataset(task=self.task,
+                                   transforms=self.transforms[2])
+            test = UnfoldARCDataset(task=self.task,
+                                  transforms=self.transforms[1],
+                                  test=True)
             
+            return train, test, val
 
-#     def _create_new_dataset(self):
-#         arc = ARCDataset(tasks=config.tasks, transforms=self.transforms)
 
+# class OneTaskOneDataset(AbstractDataset):
+#     train_test_val_transforms = \
+#         Tuple[Optional[List[Transform]],
+#               Optional[List[Transform]],
+#               Optional[List[Transform]]]
+
+#     def __init__(self, config: DictConfig,
+#                  transforms: train_test_val_transforms,
+#                  split_train_val: bool = False) -> None:
+#         self.logger = logging.getLogger('OneTaskOneDataset')
+#         self.split_train_val = split_train_val
+#         assert len(config.tasks) == 1
+#         super().__init__(config, transforms)
+
+#     class UnpackingDataset(Dataset):
+#         def __init__(self, arc_dataset: ARCDataset, test: bool = False) -> None:
+#             self.arc = arc_dataset
+#             self.test = test
+
+#         def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
+#             if(self.test):
+#                 *_, x_test, y_test = self.arc.original_dataset[0]
+#                 return x_test, y_test
+#             else:
+#                 x_train, y_train, *_ = self.arc[idx]
+
+#                 delim = 0
+#                 for tr in self.arc.transforms:
+#                     if(isinstance(tr, UnPacking)):
+#                         continue
+#                     delim += tr.count(self.arc.original_dataset[0])
+
+#                 unpack_idx = len(self.arc) // delim
+#                 return x_train[unpack_idx], y_train[unpack_idx]
+        
+#         def __len__(self) -> int:
+#             if(self.test):
+#                 *_, x_test, _ = self.arc.original_dataset[0]
+#                 return len(x_test)
+#             else:
+#                 return len(self.arc)
+
+
+#     def _split(self, arc_dataset: ARCDataset) -> Tuple[int, int, int]:
+#         tr, test, val = self.split
+#         tr = tr + test
+#         tr_num = int(tr * len(arc_dataset))
+#         val_num = len(arc_dataset) - tr_num
+#         return tr_num, 1, val_num
+
+#     def _create(self) -> Tuple[Dataset, Dataset, Dataset]:
+#         if(self.split_train_val):
+#             train_transforms = self.transforms[0]
+#             arc = ARCDataset(tasks=self.config.tasks, transforms=train_transforms)
+#             train_val_ds = self.UnpackingDataset(arc, test=False)
+#             splits = self._split(arc)
+#             indices = np.arange(len(arc))
+#             np.random.shuffle(indices)
+#             train_indicies = indices[:splits[0]]
+#             val_indicies = indices[splits[0]:]
+#             train_ds = Subset(train_val_ds, train_indicies)
+#             val_ds = Subset(train_val_ds, val_indicies)
+#             test_ds = self.UnpackingDataset(arc.original_dataset, test=True)
+#             return train_ds, test_ds, val_ds
+#         else:
+#             arc_train = ARCDataset(tasks=self.config.tasks,
+#                                    transforms=self.transforms[0])
+#             arc_val = ARCDataset(tasks=self.config.tasks,
+#                                  transforms=self.transforms[2])
+#             train_ds = self.UnpackingDataset(arc_train, False)
+#             test_ds = self.UnpackingDataset(
+#                         arc_train.original_dataset, True)
+#             val_ds = self.UnpackingDataset(arc_val, False)
+#             return train_ds, test_ds, val_ds

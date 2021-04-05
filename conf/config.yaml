@@ -1,5 +1,6 @@
 defaults:
-  - dataset: maxndataset
+  # - dataset: gpt
+  - dataset: gpt/onetaskonenn
   - model: gpt
   - train: cpu
   - hydra/launcher: rq
