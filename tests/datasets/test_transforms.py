@@ -1,20 +1,24 @@
-from itertools import permutations
+from itertools import permutations, product
 
 from datasets.transforms import ColorPermutation
 from datasets.arc import ARCDataset
-from .utils import sample_check_arc, same_shape_check_arc, N
+from .utils import (sample_check_arc,
+                    same_shape_check_arc,
+                    same_figures_check,
+                    same_sample_check,
+                    N)
 
 
 def test_color_permutation():
-    # ColorPermutation
-    cp = ColorPermutation(max_colors=10)
-    n = 10
-    r = 5
-    i = 100
-    expected = list(permutations(range(n), r))[i]
-    testee = cp._get_permutations(n, r, i)
-    assert expected == testee
+    nrange = range(2, 10)
+    irange = [0,1]
+    for (n, i) in product(nrange, irange):
+        cp = ColorPermutation(max_colors=n)
+        expected = list(permutations(range(n), n))[i]
+        testee = cp._get_permutations(n, n, i)
+        assert expected == testee
 
+    cp = ColorPermutation(max_colors=10)
     ds_10 = ARCDataset(transforms=[cp])
     assert ds_10.index is not None
     assert len(ds_10.index) == len(ds_10.tasks)
@@ -22,7 +26,7 @@ def test_color_permutation():
     assert len(ds_10.original_dataset) == N
     sample_check_arc(ds_10, N)
     ds = ARCDataset(transforms=None)
-    same_shape_check_arc(ds[0], ds_10[0])
+    assert same_shape_check_arc(ds[0], ds_10[0])
 
     cp_11 = ColorPermutation(max_colors=11)
     ds_11 = ARCDataset(transforms=[cp_11])
@@ -41,30 +45,11 @@ def test_color_permutation():
     assert len(ds_10_limit_1) == N
     sample_check_arc(ds_10_limit_1, N-1)
 
-
-# def test_unpacking():
-    # up = UnPacking()
-    # ds_up = ARCDataset(transforms=up)
-    # ds = ARCDataset()
-
-    # assert len(ds_up.index) == len(ds_up.tasks)
-    # assert len(ds_up) == ds_up.index[-1]
-    # assert len(ds_up.original_dataset) == N
-    # assert len(ds_up) > len(ds_up.original_dataset)
-    # x_train_up, y_train_up, *_ = ds_up[0]
-    # x_train, y_train, *_ = ds[0]
-
-    # assert len(x_train_up) == 1
-    # assert len(y_train_up) == 1
-    # assert x_train[0].shape == x_train_up[0].shape
-    # assert y_train[0].shape == y_train_up[0].shape
-
-
-# def test_all_transforms():
-#     up = UnPacking()
-#     cp = ColorPermutation(10)
-
-#     ds_tr = ARCDataset(transforms=[up, cp])
-#     ds = ARCDataset()
-
-#     assert len(ds_tr) > len(ds)
+    limit = 2
+    cp_10_limit_2 = ColorPermutation(max_colors=10, limit=limit)
+    ds_10_limit_2 = ARCDataset(transforms=[cp_10_limit_2])
+    for i in range(N):
+        orig = ds_10_limit_2.original_dataset[i]
+        tr = ds_10_limit_2[i*limit+1] # second permutation
+        assert same_figures_check(orig, tr)
+        # assert not same_sample_check(orig, tr)

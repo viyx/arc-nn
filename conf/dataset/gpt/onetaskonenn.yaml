@@ -1,16 +1,34 @@
 # @package _global_
 
-add_positions : true
-# target_length : 931 # 30*30+30+1
-# n_colors : 10
-# n_context : 2048
-padding : false
-end_line_token : 10
-promt_token : 11
-end_episode_token : 12
-pad_token : 13
-split : (0.8,0.1,0.1)
-# download : false
-# maxn : 6144 # n_context * 3 as add_positions == padding == true
-# datadir : data/datasets/maxn/
-tasks : ['datasets/data/training/0a938d79.json']
+add_positions: false
+padding: false
+tasks: ["datasets/data/training/0a938d79.json"]
+end_line_token: 10
+promt_token: 11
+end_episode_token: 12
+pad_token: 13
+split: (0.9,0.1) # only train and val
+transforms:
+  [
+    [
+      {
+        _target_: datasets.transforms.ColorPermutation,
+        max_colors: 10,
+        limit: 1000,
+      },
+    ],
+    [
+      {
+        _target_: datasets.transforms.ColorPermutation,
+        max_colors: 10,
+        limit: 1000,
+      },
+    ],
+    [
+      {
+        _target_: datasets.transforms.ColorPermutation,
+        max_colors: 10,
+        limit: 1000,
+      },
+    ],
+  ]

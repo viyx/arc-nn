@@ -33,7 +33,9 @@ def same_shape_check_arc(sample1, sample2):
 
     for z in zips:
         for ep in z:
-            assert ep[0].shape == ep[1].shape
+            if(ep[0].shape != ep[1].shape):
+                return False
+    return True
 
 
 def same_shape_check_onetask(sample1, sample2):
@@ -47,12 +49,37 @@ def same_shape_check_onetask(sample1, sample2):
             assert ep[0].shape == ep[1].shape
 
 
-# def same_sample_check(sample1, sample2):
-#     x_train1, y_train1, x_test1, y_test1 = sample1
-#     x_train2, y_train2, x_test2, y_test2 = sample2
+def same_sample_check(sample1, sample2):
+    x_train1, y_train1, x_test1, y_test1 = sample1
+    x_train2, y_train2, x_test2, y_test2 = sample2
 
-#     zips = [zip(x_train1, x_train2), zip(y_train1, y_train2), zip(x_test1, x_test2), zip(y_test1, y_test2)]
+    zips = [zip(x_train1, x_train2), zip(y_train1, y_train2), zip(x_test1, x_test2), zip(y_test1, y_test2)]
 
-#     for z in zips:
-#         for ep in z:
-#             assert np.allclose(ep[0], ep[1])
+    for z in zips:
+        for ep in z:
+            if(not np.allclose(ep[0], ep[1])):
+                return False
+    return True
+
+
+def same_figures_check(sample1, sample2):
+    x_train1, y_train1, x_test1, y_test1 = sample1
+    x_train2, y_train2, x_test2, y_test2 = sample2
+
+    zips = [zip(x_train1, x_train2), zip(y_train1, y_train2), zip(x_test1, x_test2), zip(y_test1, y_test2)]
+    max_colors=10
+    mapping = np.arange(max_colors)
+
+    for z in zips:
+        for ep in z:        
+                x, y = ep[0].shape
+                for i in range(x):
+                    for j in range(y):
+                        if(ep[0][i,j] != ep[1][i,j]):
+                            mapping[ep[0][i,j]] = ep[1][i,j]
+    
+    for z in zips:
+        for ep in z:
+            if(not np.allclose(mapping[ep[0]], ep[1])):
+                return False
+    return True

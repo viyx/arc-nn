@@ -7,18 +7,19 @@ from omegaconf import DictConfig
 from .transforms import Transform
 
 
+# transforms type
+TT = Tuple[Optional[List[Transform]],
+           Optional[List[Transform]],
+           Optional[List[Transform]]]
+
+
 class AbstractDataset(ABC):
     "High-level dataset."
-    train_test_val_transforms = \
-        Tuple[Optional[List[Transform]],
-              Optional[List[Transform]],
-              Optional[List[Transform]]]
-
-    def __init__(self, config: DictConfig,
-                 transforms: train_test_val_transforms) -> None:
-        self.split = eval(config.split)
+    def __init__(self,
+                 split: str,
+                 transforms: TT) -> None:
+        self.split = eval(split)
         assert sum(self.split) == 1
-        self.config = config
         self.transforms = transforms
 
     @abstractmethod

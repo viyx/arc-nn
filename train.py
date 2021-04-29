@@ -1,40 +1,43 @@
-import os
+# import os
 from tqdm import tqdm
-from datetime import datetime
+# from datetime import datetime
 import logging
+
 import numpy as np
-from datasets import MaxNDataset, GPTDataset, ColorPermutation
-from utils import set_seed
 import torch
-import torch.optim as optim
-from torch.utils.data import Subset
-import torch_xla as xla
+# import torch.optim as optim
+# from torch.utils.data import Subset
+# import torch_xla as xla
 import torch_xla.core.xla_model as xm
 import torch_xla.distributed.xla_multiprocessing as xmp
 import torch_xla.distributed.parallel_loader as pl
-from mingpt.model import GPT
 import wandb
 from wandb.util import generate_id
 import hydra
 from omegaconf import DictConfig, OmegaConf
+
+from datasets.gpt import MaxNDataset, GPTDataset
+from datasets.transforms import ColorPermutation
+from mingpt.model import GPT
+from utils import set_seed
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 def get_dataset(fast_run):
-        if(fast_run):
-            train_trans = None
-            test_trans = None
-            val_trans = None
-        else:
-            train_trans = [ColorPermutation(max_colors=FLAGS.n_colors, limit=1000)]
-            test_trans = None
-            val_trans = [ColorPermutation(max_colors=FLAGS.n_colors, limit=100)]
-        ds = MaxNDataset(transforms=[train_trans, test_trans, val_trans], config=FLAGS)
-        train, test, val = ds.datasets
-        LOGGER.info("Dataset lenghts: train = {}, test = {}, val = {}".format(len(train), len(test), len(val)))
-        return train, test, val
+    if(fast_run):
+        train_trans = None
+        test_trans = None
+        val_trans = None
+    else:
+        train_trans = [ColorPermutation(max_colors=FLAGS.n_colors, limit=1000)]
+        test_trans = None
+        val_trans = [ColorPermutation(max_colors=FLAGS.n_colors, limit=100)]
+    ds = MaxNDataset(transforms=[train_trans, test_trans, val_trans], config=FLAGS)
+    train, test, val = ds.datasets
+    LOGGER.info("Dataset lenghts: train = {}, test = {}, val = {}".format(len(train), len(test), len(val)))
+    return train, test, val
 
 
 def train(rank):

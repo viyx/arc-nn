@@ -1,13 +1,14 @@
 import os
+
 import hydra
+import torch_xla.distributed.xla_multiprocessing as xmp
+
+from train import map_fn
 
 
 @hydra.main(config_path='conf', config_name="config")
 def main(cfg):
-    import torch_xla.distributed.xla_multiprocessing as xmp
-    from train import map_fn
     assert os.environ['WANDB_API_KEY'], 'Specify wandb api key'
-
     os.environ['PYTHONWARNINGS'] = 'ignore:semaphore_tracker:UserWarning'
     os.environ['XLA_USE_BF16'] = '1'
     if(cfg.debug):
@@ -15,11 +16,7 @@ def main(cfg):
         os.environ['XRT_WORKERS'] = 'localservice:0;grpc://localhost:40934'
     else:
         assert os.environ['XRT_TPU_CONFIG'], 'Specify xla device.'
-    
-    # allow to change
-    # OmegaConf.set_struct(cfg, False)
     full_conf = hydra.core.hydra_config.HydraConfig.get()
-
     xmp.spawn(map_fn, args=(cfg, full_conf,), nprocs=cfg.n_cores, start_method='spawn')
 
 

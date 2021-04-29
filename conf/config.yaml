@@ -1,5 +1,4 @@
 defaults:
-  # - dataset: gpt
   - dataset: gpt/onetaskonenn
   - model: gpt
   - train: cpu

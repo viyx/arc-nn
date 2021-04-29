@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List
 
 from datasets.arc import ARCDataset, UnfoldARCDataset
 from datasets.transforms import ColorPermutation
@@ -71,11 +72,11 @@ def test_arc_index():
         transformed_idx = ds.index[task_idx]
 
         # check last trasform for task
-        same_shape_check_arc(ds[transformed_idx-1], ds.original_dataset[task_idx])
+        assert same_shape_check_arc(ds[transformed_idx-1], ds.original_dataset[task_idx])
 
         # check first transform for task
         n_transforms = per_task_cnt[task_idx]
-        same_shape_check_arc(ds[transformed_idx-n_transforms], ds.original_dataset[task_idx])
+        assert same_shape_check_arc(ds[transformed_idx-n_transforms], ds.original_dataset[task_idx])
 
 
 def check_unfoldarc_index(ds: UnfoldARCDataset,
@@ -110,7 +111,7 @@ def test_unfoldarc_index():
     for test in [True, False]:
         ds = UnfoldARCDataset(task=TASKNAME, transforms=[cp], test=test)
 
-        if(test):
+        if(not test):
             original_x = x_train
             original_y = y_train
             check_unfoldarc_index(ds, original_x, original_y)

@@ -1,11 +1,13 @@
 import math
 import logging
-# from argparse import ArgumentParser
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-logger = logging.getLogger(__name__)
+
+LOGGER = logging.getLogger(__name__)
+
 
 class CausalSelfAttention(nn.Module):
     """
@@ -13,7 +15,6 @@ class CausalSelfAttention(nn.Module):
     It is possible to use torch.nn.MultiheadAttention here but I am including an
     explicit implementation here to show that there is nothing too scary here.
     """
-
     def __init__(self, config):
         super().__init__()
 
@@ -36,18 +37,12 @@ class CausalSelfAttention(nn.Module):
         self.register_buffer("mask_tril", torch.tril(torch.ones(self.n_context, self.n_context))
                                      .view(1, 1, self.n_context, self.n_context))
 
-        # mask to always see all context
-        # diff = self.n_context - config.target_length
-        # tl = config.target_length
-        # rectangle = F.pad(torch.ones((diff,diff)),(0,tl,0,tl),'constant',0)
-        # self.register_buffer("mask_rect", rectangle.view(1,1,self.n_context, self.n_context))
         self.register_buffer("mask_zeros", torch.zeros(self.n_context, self.n_context))
         self.register_buffer("mask_ones", torch.ones(self.n_context, self.n_context))
 
 
     def forward(self, x, targets=None):
         B, T, C = x.size()
-
         if(targets is not None):
             t = targets.size(-1)
         else:
@@ -72,9 +67,9 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_drop(self.proj(y))
         return y
 
-class Block(nn.Module):
-    """ an unassuming Transformer block """
 
+class Block(nn.Module):
+    "Transformer block."
     def __init__(self, config):
         super().__init__()
         self.ln1 = nn.LayerNorm(config.n_embd)
@@ -90,54 +85,54 @@ class Block(nn.Module):
     def forward(self, x):
         x, targets = x
         att = self.attn(self.ln1(x), targets)
-        # att = self.attn(self.ln1(x))
         x = x + att
         x = x + self.mlp(self.ln2(x))
-        # return x
         return (x, targets)
 
 
 class GPT(nn.Module):
     """The full GPT language model, with a context size of n_context """
-
     def __init__(self, config):
         super().__init__()
 
         self.pad_token = config.pad_token
-        self.add_positions = config.add_positions
-        self.maxn = config.maxn
+        self.add_pos = config.add_positions
+        self.add_seg_pos = config.add_segment_positions
 
-        # reserve `0` for padding
-        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd, padding_idx=self.pad_token)
+        self.tok_emb = nn.Embedding(config.vocab_size,
+                                    config.n_embd,
+                                    padding_idx=self.pad_token)
 
-        if(self.add_positions):
-            self.pos_emb = nn.Embedding(config.n_context + 1, config.n_embd, padding_idx=0)
-            self.pos_emb_ab = nn.Embedding(2 + 1, config.n_embd, padding_idx=0)
+        if(self.add_pos):
+            self.pos_emb = nn.Embedding(config.n_context+1,
+                                        config.n_embd,
+                                        padding_idx=0)
+        if(self.add_seg_pos):
+            self.pos_emb_ab = nn.Embedding(2+1, config.n_embd, padding_idx=0)
         self.drop = nn.Dropout(config.embd_pdrop)
 
         # transformer
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.blocks = nn.Sequential(
+                *[Block(config) for _ in range(config.n_layer)])
 
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-        logger.info("Number of parameters: %s", sum(p.numel() for p in self.parameters()))
+        LOGGER.info("Number of parameters: %s",
+                    sum(p.numel() for p in self.parameters()))
 
     def forward(self, idx, targets=None):
         b, t = idx.size()
-        assert t <= self.maxn, "Cannot forward, input size is exhausted."
-
-        # forward the GPT model
         if(self.add_positions):
             idx = idx.view(b, 3, -1)
-            token_embeddings = self.tok_emb(idx[:,0,:]) # each index maps to a (learnable) vector
-            pos_embeddings = self.pos_emb(idx[:,1,:])
-            pos_ab_embeddings = self.pos_emb_ab(idx[:,2,:])
-            x = token_embeddings + pos_embeddings + pos_ab_embeddings
+            token_emb = self.tok_emb(idx[:, 0, :])
+            pos_emb = self.pos_emb(idx[:, 1, :])
+            pos_seg_emb = self.pos_emb_ab(idx[:, 2, :])
+            x = token_emb + pos_emb + pos_seg_emb
         else:
-            x = self.tok_emb(idx) # each index maps to a (learnable) vector
+            x = self.tok_emb(idx)
 
         x = self.drop(x)
         x, _ = self.blocks((x, targets))
