@@ -1,6 +1,7 @@
 # For more information, please refer to https://aka.ms/vscode-docker-python
 # FROM python:3.8-slim-buster
-FROM gcr.io/tpu-pytorch/xla:nightly_3.7
+# FROM gcr.io/tpu-pytorch/xla:nightly_3.7
+FROM gcr.io/tpu-pytorch/xla:nightly_3.8_tpuvm
 
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1
